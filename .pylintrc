@@ -1,0 +1,22 @@
+[FORMAT]
+max-line-length=120
+[MESSAGES CONTROL]
+disable=redefined-outer-name,unused-argument,missing-docstring,C0103,protected-access,R0903,R0201,abstract-class-instantiated
+
+[TYPECHECK]
+ignored-classes=_Gino
+
+[SIMILARITIES]
+
+# Minimum lines number of a similarity.
+min-similarity-lines=4
+
+# Ignore comments when computing similarities.
+ignore-comments=yes
+
+# Ignore docstrings when computing similarities.
+ignore-docstrings=yes
+
+# Ignore imports when computing similarities.
+ignore-imports=yes
+
