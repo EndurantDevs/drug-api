@@ -4,12 +4,14 @@ import os
 import tempfile
 from pathlib import Path, PurePath
 from zipfile import ZipFile
+from zlib import decompressobj  # pylint: disable=no-name-in-module
 from arq import create_pool
 from arq.connections import RedisSettings
 from sqlalchemy.inspection import inspect
 from orjson import loads as json_loads  # pylint: disable=maybe-no-member,no-name-in-module
 from dateutil.parser import parse as parse_date
 from aiofile import async_open
+import ijson
 
 
 from process.ext.utils import download_it, download_it_and_save, make_class, push_objects, print_time_info
@@ -18,6 +20,7 @@ from db.connection import init_db
 
 
 async def download_label_content(ctx, task):
+    # pylint: disable=too-many-locals
     redis = ctx['redis']
     print('Starting Labels file download: ', task.get('file'))
 
@@ -25,18 +28,37 @@ async def download_label_content(ctx, task):
         p = Path(task.get('file'))
         tmp_filename = str(PurePath(str(tmpdirname), p.name))
         await download_it_and_save(task.get('file'), tmp_filename)
-        with ZipFile(tmp_filename) as myzip:
-            myzip.extract(p.stem, path=tmpdirname)
-
         json_tmp_file = str(PurePath(str(tmpdirname), p.stem))
-        async with async_open(json_tmp_file, 'r') as afp:
-            obj = json_loads(await afp.read())
 
+        async with async_open(json_tmp_file, 'wb+') as out:
+            async with async_open(tmp_filename, 'rb') as src:
+                with ZipFile(tmp_filename) as zf:
+                    for in_file in zf.infolist():
+                        src.seek(in_file.header_offset)
+                        await src.read(30)
+                        await src.read(len(in_file.filename))
+                        if len(in_file.extra) > 0:
+                            await src.read(len(in_file.extra))
+                        if len(in_file.comment) > 0:
+                            await src.read(len(in_file.comment))
+
+                        decomp = decompressobj(-15)
+                        i = in_file.compress_size
+                        read_block = 512 * 1024
+                        while i > 0:
+                            read_block = read_block if i > read_block else i
+                            result = decomp.decompress(await src.read(i))
+                            await out.write(result)
+                            i -= read_block
+                        result = decomp.flush()
+                        await out.write(result)
+
+        async with async_open(json_tmp_file, 'r') as afp:
             counter = 0
             send_counter = 0
             task = {'what': task.get('what'), 'model': 'label', 'results': []}
 
-            for res in obj['results']:
+            async for res in ijson.items(afp, 'results.item'):
                 task['results'].append(res)
                 if counter == int(os.environ.get('SAVE_PER_PACK', 100)):
                     await redis.enqueue_job('process_label_results', task)
@@ -95,14 +117,28 @@ async def label_shutdown(ctx):
     import_date = ctx['import_date']
     if ctx['context'].get('label_count'):
         mylabel = make_class(Label, import_date)
-        import_mylabel_count = await db.func.count(mylabel.product_id).gino.scalar()  # pylint: disable=E1101
+        import_mylabel_count = await db.func.count(mylabel.id).gino.scalar()  # pylint: disable=E1101
         if import_mylabel_count == ctx['context']['label_count']:
             db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
             for table in ['label']:
                 async with db.transaction():
+                    print('Creating indexes..')
+                    await db.status(
+                        f"CREATE INDEX idx_product_ndc_{import_date} ON "
+                        f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
+                    await db.status(
+                        f"CREATE INDEX idx_package_ndc_{import_date} ON "
+                        f"{db_schema}.{table}_{import_date} USING GIN(package_ndc);")
+
                     await db.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
+
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table} RENAME TO {table}_old;")
+                    await db.status("ALTER INDEX IF EXISTS idx_product_ndc RENAME TO idx_product_ndc_old;")
+                    await db.status("ALTER INDEX IF EXISTS idx_package_ndc RENAME TO idx_package_ndc_old;")
+
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table}_{import_date} RENAME TO {table};")
+                    await db.status(f"ALTER INDEX IF EXISTS idx_product_ndc_{import_date} RENAME TO idx_product_ndc;")
+                    await db.status(f"ALTER INDEX IF EXISTS idx_package_ndc_{import_date} RENAME TO idx_package_ndc;")
 
             print('Labeling rows in JSON:', ctx['context']['label_count'])
             print('Labling rows in DB: ', await db.func.count(Label.id).gino.scalar())  # pylint: disable=E1101

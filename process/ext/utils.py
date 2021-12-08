@@ -6,11 +6,13 @@ from aiofile import async_open
 from arq import Retry
 import humanize
 
+headers = {'user-agent': 'Healthporta Drug API Importer, https://github.com/EndurantDevs/drug-api'}
+
 
 async def download_it(url):
     transport = httpx.AsyncHTTPTransport(retries=3)
     timeout = httpx.Timeout(5)
-    async with httpx.AsyncClient(transport=transport, timeout=timeout) as client:
+    async with httpx.AsyncClient(transport=transport, timeout=timeout, headers=headers) as client:
         r = await client.get(url)
         return r
 
@@ -18,12 +20,16 @@ async def download_it(url):
 async def download_it_and_save(url, filepath):
     transport = httpx.AsyncHTTPTransport(retries=3)
     timeout = httpx.Timeout(10)
+
     async with async_open(filepath, 'wb+') as afp:
-        async with httpx.AsyncClient(timeout=timeout, transport=transport,) as client:
+        async with httpx.AsyncClient(timeout=timeout, transport=transport, headers=headers) as client:
             async with client.stream('GET', url) as response:
                 if response.status_code == 200:
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        await afp.write(chunk)
+                    try:
+                        async for chunk in response.aiter_bytes(chunk_size=65536):
+                            await afp.write(chunk)
+                    except (httpx.TimeoutException, httpx.ReadError, httpx.NetworkError):
+                        raise Retry()
                 else:
                     raise Retry()
 

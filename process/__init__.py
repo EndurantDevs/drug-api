@@ -22,6 +22,7 @@ class Labeling:
     functions = [download_label_content, process_label_results, init_label_file]
     on_startup = label_startup
     on_shutdown = label_shutdown
+    queue_read_limit = 10
 
 
 @click.group()
