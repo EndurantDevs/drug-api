@@ -132,13 +132,18 @@ async def label_shutdown(ctx):
 
                     await db.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
 
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_product_ndc RENAME TO idx_product_ndc_old;")
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_package_ndc RENAME TO idx_package_ndc_old;")
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table} RENAME TO {table}_old;")
-                    await db.status("ALTER INDEX IF EXISTS idx_product_ndc RENAME TO idx_product_ndc_old;")
-                    await db.status("ALTER INDEX IF EXISTS idx_package_ndc RENAME TO idx_package_ndc_old;")
 
-                    await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table}_{import_date} RENAME TO {table};")
-                    await db.status(f"ALTER INDEX IF EXISTS idx_product_ndc_{import_date} RENAME TO idx_product_ndc;")
-                    await db.status(f"ALTER INDEX IF EXISTS idx_package_ndc_{import_date} RENAME TO idx_package_ndc;")
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_product_ndc_{import_date} RENAME TO idx_product_ndc;")
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_package_ndc_{import_date} RENAME TO idx_package_ndc;")
+                    await db.status(f"ALTER TABLE IF EXISTS "
+                                    f"{db_schema}.{table}_{import_date} RENAME TO {table};")
 
             print('Labeling rows in JSON:', ctx['context']['label_count'])
             print('Labling rows in DB: ', await db.func.count(Label.id).gino.scalar())  # pylint: disable=E1101
