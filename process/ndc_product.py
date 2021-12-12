@@ -3,13 +3,13 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path, PurePath
-from zipfile import ZipFile
 from arq import create_pool
 from arq.connections import RedisSettings
 from sqlalchemy.inspection import inspect
 from orjson import loads as json_loads  # pylint: disable=maybe-no-member,no-name-in-module
 from dateutil.parser import parse as parse_date
 from aiofile import async_open
+from async_unzip.unzipper import unzip
 
 
 from process.ext.utils import download_it, download_it_and_save, make_class, push_objects, print_time_info
@@ -27,9 +27,7 @@ async def download_content(ctx, task):
 
         await download_it_and_save(task.get('file'), tmp_filename)
 
-        with ZipFile(tmp_filename) as z:
-            async with async_open(json_tmp_file, 'wb+') as f:
-                await f.write(z.read(p.stem))
+        await unzip(tmp_filename, tmpdirname)
 
         async with async_open(json_tmp_file, 'r') as afp:
             obj = json_loads(await afp.read())  # pylint: disable=maybe-no-member
