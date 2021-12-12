@@ -3,8 +3,6 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path, PurePath
-from zipfile import ZipFile
-from zlib import decompressobj  # pylint: disable=no-name-in-module
 from arq import create_pool
 from arq.connections import RedisSettings
 from sqlalchemy.inspection import inspect
@@ -12,6 +10,7 @@ from orjson import loads as json_loads  # pylint: disable=maybe-no-member,no-nam
 from dateutil.parser import parse as parse_date
 from aiofile import async_open
 import ijson
+from async_unzip.unzipper import unzip
 
 
 from process.ext.utils import download_it, download_it_and_save, make_class, push_objects, print_time_info
@@ -30,28 +29,7 @@ async def download_label_content(ctx, task):
         await download_it_and_save(task.get('file'), tmp_filename)
         json_tmp_file = str(PurePath(str(tmpdirname), p.stem))
 
-        async with async_open(json_tmp_file, 'wb+') as out:
-            async with async_open(tmp_filename, 'rb') as src:
-                with ZipFile(tmp_filename) as zf:
-                    for in_file in zf.infolist():
-                        src.seek(in_file.header_offset)
-                        await src.read(30)
-                        await src.read(len(in_file.filename))
-                        if len(in_file.extra) > 0:
-                            await src.read(len(in_file.extra))
-                        if len(in_file.comment) > 0:
-                            await src.read(len(in_file.comment))
-
-                        decomp = decompressobj(-15)
-                        i = in_file.compress_size
-                        read_block = 512 * 1024
-                        while i > 0:
-                            read_block = read_block if i > read_block else i
-                            result = decomp.decompress(await src.read(i))
-                            await out.write(result)
-                            i -= read_block
-                        result = decomp.flush()
-                        await out.write(result)
+        await unzip(tmp_filename, tmpdirname)
 
         async with async_open(json_tmp_file, 'r') as afp:
             counter = 0
