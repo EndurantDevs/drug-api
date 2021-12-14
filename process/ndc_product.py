@@ -113,9 +113,48 @@ async def shutdown(ctx):
         import_product_count = await db.func.count(myproduct.product_id).gino.scalar()  # pylint: disable=E1101
         if import_product_count == ctx['context']['product_count']:
             db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
+            await db.status("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
+            await db.status("CREATE EXTENSION IF NOT EXISTS btree_gin;")
             for table in ['product', 'package']:
                 async with db.transaction():
+                    print(f'Creating indexes for {table} ...')
+                    await db.status(
+                        f"CREATE INDEX {table}_idx_product_ndc_{import_date} ON "
+                        f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
+
                     await db.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
+
+                    if table == 'product':
+                        await db.status(f"CREATE INDEX {table}_idx_brand_trgm_idx_{import_date} ON "
+                                        f"{db_schema}.{table}_{import_date} "
+                                        f"USING GIN(brand_name {db_schema}.gin_trgm_ops);")
+                        await db.status(f"CREATE INDEX {table}_idx_generic_trgm_idx_{import_date} ON "
+                                        f"{db_schema}.{table}_{import_date} USING "
+                                        f"GIN(generic_name {db_schema}.gin_trgm_ops);")
+
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.{table}_idx_product_ndc RENAME TO "
+                                    f"{table}_idx_product_ndc_old;")
+
+                    if table == 'product':
+                        await db.status(f"ALTER INDEX IF EXISTS "
+                                        f"{db_schema}.{table}_idx_brand_trgm_idx RENAME TO "
+                                        f"{table}_idx_brand_trgm_idx_old;")
+                        await db.status(f"ALTER INDEX IF EXISTS "
+                                        f"{db_schema}.{table}_idx_generic_trgm_idx RENAME TO "
+                                        f"{table}_idx_generic_trgm_idx_old;")
+
+                        await db.status(f"ALTER INDEX IF EXISTS "
+                                        f"{db_schema}.{table}_idx_brand_trgm_idx_{import_date} RENAME TO "
+                                        f"{table}_idx_brand_trgm_idx;")
+                        await db.status(f"ALTER INDEX IF EXISTS "
+                                        f"{db_schema}.{table}_idx_generic_trgm_idx_{import_date} RENAME TO "
+                                        f"{table}_idx_generic_trgm_idx;")
+
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.{table}_idx_product_ndc_{import_date} RENAME TO "
+                                    f"{table}_idx_product_ndc;")
+
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table} RENAME TO {table}_old;")
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table}_{import_date} RENAME TO {table};")
 
