@@ -3,10 +3,10 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path, PurePath
+from json import loads
 from arq import create_pool
 from arq.connections import RedisSettings
 from sqlalchemy.inspection import inspect
-from orjson import loads as json_loads  # pylint: disable=maybe-no-member,no-name-in-module
 from dateutil.parser import parse as parse_date
 from aiofile import async_open
 import ijson
@@ -127,7 +127,8 @@ async def label_shutdown(ctx):
             print('Labling rows in DB: ', await db.func.count(Label.id).gino.scalar())  # pylint: disable=E1101
             print_time_info(ctx['context']['start'])
         else:
-            print("Aborted: Imported rows Number differs from FDA rows number!")
+            print(f"Aborted: Imported rows Number differs from FDA rows number! "
+                  f"(JSON: {ctx['context']['label_count']}, DB: {import_mylabel_count})")
     else:
         print('Labeling import failed')
 
@@ -135,7 +136,7 @@ async def label_shutdown(ctx):
 async def init_label_file(ctx):
     redis = await create_pool(RedisSettings())
     r = await download_it(os.environ['MAIN_RX_JSON_URL'])
-    obj = json_loads(r.content)
+    obj = loads(r.content)
     ctx['context']['label_count'] = obj['results']['drug']['label']['total_records']
     print(f"Going to import {ctx['context']['label_count']} rows")
     for key in ['label']:
