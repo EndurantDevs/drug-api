@@ -3,10 +3,11 @@ import asyncio
 import os
 import tempfile
 from pathlib import Path, PurePath
+from json import loads
 from arq import create_pool
 from arq.connections import RedisSettings
 from sqlalchemy.inspection import inspect
-from orjson import loads as json_loads  # pylint: disable=maybe-no-member,no-name-in-module
+import ijson
 from dateutil.parser import parse as parse_date
 from aiofile import async_open
 from async_unzip.unzipper import unzip
@@ -30,14 +31,11 @@ async def download_content(ctx, task):
         await unzip(tmp_filename, tmpdirname)
 
         async with async_open(json_tmp_file, 'r') as afp:
-            obj = json_loads(await afp.read())  # pylint: disable=maybe-no-member
-
             counter = 0
             send_counter = 0
             task = {'what': task.get('what'), 'model': 'product', 'results': []}
-            ctx['context']['product_count'] = len(obj['results'])
 
-            for res in obj['results']:
+            async for res in ijson.items(afp, 'results.item'):
                 task['results'].append(res)
                 if counter == int(os.environ.get('SAVE_PER_PACK', 100)):
                     await redis.enqueue_job('process_results', task)
@@ -46,6 +44,7 @@ async def download_content(ctx, task):
                     send_counter += 1
                 counter += 1
             await redis.enqueue_job('process_results', task)
+
     print('Added taks: ', send_counter + 1)
     return 1
 
@@ -163,7 +162,8 @@ async def shutdown(ctx):
             print('Packages in DB: ', await db.func.count(Package.package_ndc).gino.scalar())  # pylint: disable=E1101
             print_time_info(ctx['context']['start'])
         else:
-            print("Aborted: Imported rows Number differs from FDA rows number!")
+            print(f"Aborted: Imported rows Number differs from FDA rows number! "
+                  f"(JSON: {ctx['context']['product_count']}, DB: {import_product_count})")
     else:
         print('Product import failed')
 
@@ -171,8 +171,10 @@ async def shutdown(ctx):
 async def init_file(ctx):
     redis = await create_pool(RedisSettings())
     r = await download_it(os.environ['MAIN_RX_JSON_URL'])
-    obj = json_loads(r.content)
-
+    # it is very small in this case
+    obj = loads(r.content)
+    ctx['context']['product_count'] = obj['results']['drug']['ndc']['total_records']
+    print(f"Going to import {ctx['context']['product_count']} rows")
     for key in ['ndc']:
         for part in obj['results']['drug'][key]['partitions']:
             await redis.enqueue_job('download_content', {'what': key, 'file': part['file']})

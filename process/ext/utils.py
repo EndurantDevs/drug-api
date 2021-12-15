@@ -2,10 +2,12 @@ import datetime
 import httpx
 from gino.exceptions import GinoException
 from asyncpg.exceptions import UniqueViolationError
+import ijson
 from aiofile import async_open
 from arq import Retry
 import humanize
 
+HTTP_CHUNK_SIZE = 512 * 1024
 headers = {'user-agent': 'Healthporta Drug API Importer, https://github.com/EndurantDevs/drug-api'}
 
 
@@ -20,13 +22,12 @@ async def download_it(url):
 async def download_it_and_save(url, filepath):
     transport = httpx.AsyncHTTPTransport(retries=3)
     timeout = httpx.Timeout(10)
-
     async with async_open(filepath, 'wb+') as afp:
         async with httpx.AsyncClient(timeout=timeout, transport=transport, headers=headers) as client:
             async with client.stream('GET', url) as response:
                 if response.status_code == 200:
                     try:
-                        async for chunk in response.aiter_bytes(chunk_size=65536):
+                        async for chunk in response.aiter_bytes(chunk_size=HTTP_CHUNK_SIZE):
                             await afp.write(chunk)
                     except (httpx.TimeoutException, httpx.ReadError, httpx.NetworkError):
                         raise Retry()
