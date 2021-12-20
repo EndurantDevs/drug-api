@@ -107,6 +107,12 @@ async def label_shutdown(ctx):
                     await db.status(
                         f"CREATE INDEX idx_package_ndc_{import_date} ON "
                         f"{db_schema}.{table}_{import_date} USING GIN(package_ndc);")
+                    await db.status(
+                        f"CREATE INDEX idx_label_id_{import_date} ON "
+                        f"{db_schema}.{table}_{import_date} (id);")
+                    await db.status(
+                        f"CREATE INDEX idx_label_set_id_{import_date} ON "
+                        f"{db_schema}.{table}_{import_date} (set_id);")
 
                     await db.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
 
@@ -114,12 +120,20 @@ async def label_shutdown(ctx):
                                     f"{db_schema}.idx_product_ndc RENAME TO idx_product_ndc_old;")
                     await db.status(f"ALTER INDEX IF EXISTS "
                                     f"{db_schema}.idx_package_ndc RENAME TO idx_package_ndc_old;")
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_label_id RENAME TO idx_label_id_old;")
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_label_set_id RENAME TO idx_label_set_id_old;")
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table} RENAME TO {table}_old;")
 
                     await db.status(f"ALTER INDEX IF EXISTS "
                                     f"{db_schema}.idx_product_ndc_{import_date} RENAME TO idx_product_ndc;")
                     await db.status(f"ALTER INDEX IF EXISTS "
                                     f"{db_schema}.idx_package_ndc_{import_date} RENAME TO idx_package_ndc;")
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_label_id_{import_date} RENAME TO idx_label_id;")
+                    await db.status(f"ALTER INDEX IF EXISTS "
+                                    f"{db_schema}.idx_label_set_id_{import_date} RENAME TO idx_label_set_id;")
                     await db.status(f"ALTER TABLE IF EXISTS "
                                     f"{db_schema}.{table}_{import_date} RENAME TO {table};")
 
@@ -134,8 +148,8 @@ async def label_shutdown(ctx):
 
 
 async def init_label_file(ctx):
-    redis = await create_pool(RedisSettings())
-    r = await download_it(os.environ['MAIN_RX_JSON_URL'])
+    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
+    r = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
     obj = loads(r.content)
     ctx['context']['label_count'] = obj['results']['drug']['label']['total_records']
     print(f"Going to import {ctx['context']['label_count']} rows")
@@ -145,5 +159,5 @@ async def init_label_file(ctx):
 
 
 async def main():
-    redis = await create_pool(RedisSettings())
+    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
     await redis.enqueue_job('init_label_file')
