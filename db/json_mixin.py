@@ -38,7 +38,7 @@ class JSONOutputMixin:
             return str(value)
         return value
 
-    def to_dict(self):
+    def to_json_dict(self):
         res = {
             **dict(self._get_column_items()),
             **self._get_executable_fields()

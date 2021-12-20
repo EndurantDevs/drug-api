@@ -2,7 +2,6 @@ import datetime
 import httpx
 from gino.exceptions import GinoException
 from asyncpg.exceptions import UniqueViolationError
-import ijson
 from aiofile import async_open
 from arq import Retry
 import humanize
