@@ -124,6 +124,7 @@ async def shutdown(ctx):
                     await db.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
 
                     if table == 'product':
+                        #FIX SCHEMA!!!
                         await db.status(f"CREATE INDEX {table}_idx_brand_trgm_idx_{import_date} ON "
                                         f"{db_schema}.{table}_{import_date} "
                                         f"USING GIN(brand_name {db_schema}.gin_trgm_ops);")
