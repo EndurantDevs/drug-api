@@ -109,6 +109,30 @@ async def product_ndc_obj(request, product_ndc):
     raise sanic.exceptions.NotFound
 
 
+@blueprint.get('/list-product/<letter>')
+@blueprint.get('/list-product/<letter>/<page:int>')
+async def list_product_letter(request, letter, page=0):
+    results_per_page = 100
+    if not letter or len(letter) > 1:
+        raise sanic.exceptions.NotFound
+    if not page or page<0:
+        page = 0
+
+    data = []
+    q = db.select([Product.product_ndc, Product.generic_name]).where(
+        Product.generic_name.ilike(f"{letter}%")).order_by(Product.generic_name, Product.brand_name).limit(
+        results_per_page).offset(results_per_page * page).gino
+
+
+    async with db.transaction():
+        async for res in q.iterate():
+            obj = {'product_ndc': res['product_ndc'], 'name': res['generic_name']}
+            data.append(obj)
+
+    if data:
+        return response.json(data)
+    raise sanic.exceptions.NotFound
+
 @blueprint.get('/name/<product_name>/products')
 @blueprint.get('/name/<product_name>/generic_products')
 @blueprint.get('/name/<product_name>/brand_products')
