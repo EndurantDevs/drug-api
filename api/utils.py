@@ -12,12 +12,15 @@ async def get_generic_packages(product_name):
                 (db.func.lower(Product.generic_name) == db.func.lower(Product.brand_name)) |
                 (Product.brand_name == None)))
 
-    q = db.select([Product.generic_name, Product.brand_name, Product.dosage_form, Package.package_ndc,
-                      Package.description]).select_from(
+    q = db.select(
+        [Product.generic_name, Product.brand_name, Product.dosage_form, Product.short_dosage_form, Package.package_ndc,
+            Package.description, Package.size, Package.size_extra, Package.packages_number,
+            Package.package_format]).select_from(
         Product.join(Package, Product.product_ndc == Package.product_ndc)).where(
         Product.product_ndc.in_(subq)).gino
 
-    result_names = ['generic_name', 'brand_name', 'dosage_form', 'package_ndc', 'package_description']
+    result_names = ['generic_name', 'brand_name', 'dosage_form', 'short_dosage_form', 'package_ndc',
+        'package_description', 'size', 'size_extra', 'packages_number', 'package_format']
     async with db.transaction():
         async for package in q.iterate():
             obj = {}
@@ -39,12 +42,15 @@ async def get_brand_packages(product_name):
         (db.func.lower(Product.generic_name) != db.func.lower(Product.brand_name)) &
         (Product.brand_name != None))
 
-    q = db.select([Product.generic_name, Product.brand_name, Product.dosage_form, Package.package_ndc,
-                      Package.description]).select_from(
+    q = db.select(
+        [Product.generic_name, Product.brand_name, Product.dosage_form, Product.short_dosage_form, Package.package_ndc,
+            Package.description, Package.size, Package.size_extra, Package.packages_number,
+            Package.package_format]).select_from(
         Product.join(Package, Product.product_ndc == Package.product_ndc)).where(
         Product.product_ndc.in_(subq)).gino
 
-    result_names = ['generic_name', 'brand_name', 'dosage_form', 'package_ndc', 'package_description']
+    result_names = ['generic_name', 'brand_name', 'dosage_form', 'short_dosage_form', 'package_ndc',
+        'package_description', 'size', 'size_extra', 'packages_number', 'package_format']
     async with db.transaction():
         async for package in q.iterate():
             obj = {}

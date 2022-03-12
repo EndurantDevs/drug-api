@@ -1,6 +1,7 @@
 import datetime
 import asyncio
 import os
+import re
 import tempfile
 from pathlib import Path, PurePath
 from json import loads
@@ -16,6 +17,8 @@ from async_unzip.unzipper import unzip
 from process.ext.utils import download_it, download_it_and_save, make_class, push_objects, print_time_info
 from db.models import Product, Package, db
 from db.connection import init_db
+
+product_description_re = re.compile(r'(\d+) (.*?) in (\d+) (.*?) \(\d+-\d+-\d+\)')
 
 
 async def download_content(ctx, task):
@@ -68,6 +71,10 @@ async def process_results(ctx, task):
             elif col not in obj:
                 obj[col] = None
 
+        if not ('dosage_form' in obj) and obj['dosage_form']:
+            obj['dosage_form'] = ''
+        obj['short_dosage_form'] = obj['dosage_form'].split(',')[0]
+
         for pkg in res['packaging']:
             packagin_obj = {}
             for pkg_col in [column.name for column in inspect(Package).c]:
@@ -81,6 +88,31 @@ async def process_results(ctx, task):
                 elif pkg_col not in packagin_obj:
                     packagin_obj[pkg_col] = None
             packagin_obj['product_ndc'] = obj['product_ndc']
+            if not ('description' in packagin_obj) and packagin_obj['description']:
+                packagin_obj['description'] = ''
+
+            if len(packagin_obj['package_ndc']) < 12:
+                packagin_obj['package_ndc'] = '-'.join((packagin_obj['product_ndc'], packagin_obj['package_ndc']))
+
+            tmp_arr = packagin_obj['package_ndc'].split('-')
+
+            if (len(''.join(tmp_arr)) != 11):
+                if(len(tmp_arr[0]) == 4):
+                    tmp_arr[0] = '0' + tmp_arr[0]
+                elif(len(tmp_arr[1]) == 3):
+                    tmp_arr[1] = '0' + tmp_arr[1]
+                elif(len(tmp_arr[2]) == 1):
+                    tmp_arr[2] = '0' + tmp_arr[2]
+            packagin_obj['ndc11'] = ''.join(tmp_arr)
+
+            if (tmp_arr_match := product_description_re.match(packagin_obj['description'])):
+                (packagin_obj['size'], packagin_obj['size_extra'], packagin_obj['packages_number'],
+                packagin_obj['package_format']) = tmp_arr_match.groups()
+                packagin_obj['size'] = int(packagin_obj['size'])
+                packagin_obj['packages_number'] = int(packagin_obj['packages_number'])
+                if packagin_obj['size_extra'] == obj['dosage_form']:
+                    packagin_obj['size_extra'] = ''
+
             packagin_obj_list.append(packagin_obj)
         obj_list.append(obj)
 
