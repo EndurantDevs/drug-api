@@ -109,6 +109,41 @@ async def product_ndc_obj(request, product_ndc):
     raise sanic.exceptions.NotFound
 
 
+@blueprint.get('/list-product/all')
+async def list_product_all(request, letter='a', page=0, prefix='', separator='', suffix=''):
+    for (key, value) in request.query_args:
+        if key == 'prefix' and value:
+            prefix = value
+        elif key == 'separator' and value:
+            separator = value
+        elif key == 'suffix' and value:
+            suffix = value
+    results_per_page = 100000000
+    if not letter or len(letter) > 1:
+        raise sanic.exceptions.NotFound
+    if not page or page<0:
+        page = 0
+
+    data = ''
+    q = db.select([Product.product_ndc, Product.generic_name, Product.brand_name]).order_by(Product.generic_name, Product.brand_name).limit(
+        results_per_page).offset(results_per_page * page).gino
+
+
+    async with db.transaction():
+        from urllib.parse import quote
+        async for res in q.iterate():
+            if res["generic_name"]:
+                name = res["generic_name"]
+            if res["brand_name"] and res["generic_name"] and res['brand_name'].lower() != res['generic_name'].lower():
+                name = res["brand_name"]
+            if name:
+                data += f'{prefix}{quote(str(name.capitalize()), safe="")}{separator}{res["product_ndc"]}{suffix}\n'
+
+    if data:
+        return response.text(data)
+    raise sanic.exceptions.NotFound
+
+
 @blueprint.get('/list-product/<letter>')
 @blueprint.get('/list-product/<letter>/<page:int>')
 async def list_product_letter(request, letter, page=0):

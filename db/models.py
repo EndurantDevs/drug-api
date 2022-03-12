@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import Column, String, Boolean, ARRAY, JSON, DATE, TEXT
+from sqlalchemy import Column, String, BigInteger, Boolean, ARRAY, JSON, DATE, TEXT
 
 from db.connection import db
 from db.json_mixin import JSONOutputMixin
@@ -20,6 +20,7 @@ class Product(db.Model, JSONOutputMixin):
     openfda = Column(JSON)
     marketing_category = Column(String)
     dosage_form = Column(String)
+    short_dosage_form = Column(String)
     spl_id = Column(String)
     product_type = Column(String)
     route = Column(ARRAY(String))
@@ -38,8 +39,13 @@ class Package(db.Model, JSONOutputMixin):
         {'schema': os.getenv('DB_SCHEMA') or 'rx_data', 'extend_existing': True},
     )
     package_ndc = Column(String, primary_key=True)
+    ndc11 = Column(String)
     product_ndc = Column(String)
     description = Column(TEXT)
+    size = Column(BigInteger)
+    size_extra = Column(String)
+    packages_number = Column(BigInteger)
+    package_format = Column(String)
     marketing_start_date = Column(DATE)
     sample = Column(Boolean)
 
