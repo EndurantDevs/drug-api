@@ -18,7 +18,7 @@ h11==0.12.0
 hiredis==2.0.0
 httpcore==0.13.7
 httptools==0.3.0
-httpx==0.18.2
+httpx==0.23.0
 humanize==3.13.1
 idna==3.3
 ijson==3.1.4
