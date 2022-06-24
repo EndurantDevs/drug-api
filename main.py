@@ -34,7 +34,7 @@ def start(host, port, workers, debug, accesslog):
         sql_reset=False,
         sql_close_all=False
     )
-    api = Sanic(__name__, load_env=True, env_prefix="HLTHPRT_")
+    api = Sanic(__name__, env_prefix="HLTHPRT_")
     if debug:
         os.environ['HLTHPRT_DB_ECHO'] = 'True'
     init_api(api)
