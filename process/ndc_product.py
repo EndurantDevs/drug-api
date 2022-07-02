@@ -135,6 +135,7 @@ async def startup(ctx):
     mypackage = make_class(Package, import_date)
     await myproduct.__table__.gino.create()
     await mypackage.__table__.gino.create()
+    print("Preparing done")
 
 
 async def shutdown(ctx):
@@ -203,6 +204,7 @@ async def shutdown(ctx):
 
 async def init_file(ctx):
     redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
+    print('Downloading data from: ', os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
     r = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
     # it is very small in this case
     obj = loads(r.content)
@@ -215,4 +217,4 @@ async def init_file(ctx):
 
 async def main():
     redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
-    await redis.enqueue_job('init_file')
+    x = await redis.enqueue_job('init_file')
