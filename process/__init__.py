@@ -1,6 +1,9 @@
+import os
 import asyncio
 import uvloop
 import click
+
+from arq.connections import RedisSettings
 
 from process.ndc_product import download_content, process_results, init_file, startup, shutdown
 from process.ndc_product import main as initiate_product_import
@@ -13,9 +16,10 @@ uvloop.install()
 
 
 class NDC:
-    functions = [download_content, process_results, init_file]
+    functions = [init_file, download_content, process_results]
     on_startup = startup
     on_shutdown = shutdown
+    redis_settings = RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS'))
 
 
 class Labeling:
@@ -23,6 +27,7 @@ class Labeling:
     on_startup = label_startup
     on_shutdown = label_shutdown
     queue_read_limit = 10
+    redis_settings = RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS'))
 
 
 @click.group()

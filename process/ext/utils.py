@@ -68,4 +68,4 @@ def print_time_info(start):
     now = datetime.datetime.now()
     delta = now - start
     print('Import Time Delta: ', delta)
-    print('Import took ', humanize.naturaldelta(now, when=start))
+    print('Import took ', humanize.naturaldelta(delta))
