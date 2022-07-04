@@ -2,6 +2,7 @@ import datetime
 import asyncio
 import os
 import tempfile
+import msgpack
 from pathlib import Path, PurePath
 from json import loads
 from arq import create_pool
@@ -148,7 +149,10 @@ async def label_shutdown(ctx):
 
 
 async def init_label_file(ctx):
-    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
+    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              job_serializer=msgpack.packb,
+                              job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
+
     r = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
     obj = loads(r.content)
     ctx['context']['label_count'] = obj['results']['drug']['label']['total_records']
@@ -159,5 +163,7 @@ async def init_label_file(ctx):
 
 
 async def main():
-    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
+    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              job_serializer=msgpack.packb,
+                              job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
     await redis.enqueue_job('init_label_file')

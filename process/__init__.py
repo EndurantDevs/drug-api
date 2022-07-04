@@ -2,6 +2,7 @@ import os
 import asyncio
 import uvloop
 import click
+import msgpack
 
 from arq.connections import RedisSettings
 
@@ -20,6 +21,8 @@ class NDC:
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS'))
+    job_serializer = msgpack.packb
+    job_deserializer = lambda b: msgpack.unpackb(b, raw=False)
 
 
 class Labeling:
@@ -28,6 +31,8 @@ class Labeling:
     on_shutdown = label_shutdown
     queue_read_limit = 10
     redis_settings = RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS'))
+    job_serializer = msgpack.packb
+    job_deserializer = lambda b: msgpack.unpackb(b, raw=False)
 
 
 @click.group()

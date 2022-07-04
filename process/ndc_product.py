@@ -3,6 +3,7 @@ import asyncio
 import os
 import re
 import tempfile
+import msgpack
 from pathlib import Path, PurePath
 from json import loads
 from arq import create_pool
@@ -203,7 +204,9 @@ async def shutdown(ctx):
 
 
 async def init_file(ctx):
-    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
+    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              job_serializer=msgpack.packb,
+                              job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
     print('Downloading data from: ', os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
     r = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
     # it is very small in this case
@@ -216,5 +219,7 @@ async def init_file(ctx):
 
 
 async def main():
-    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')))
+    redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              job_serializer=msgpack.packb,
+                              job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
     x = await redis.enqueue_job('init_file')
