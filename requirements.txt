@@ -33,7 +33,7 @@ pytz==2022.1
 PyYAML==6.0
 redis==4.3.4
 rfc3986==1.5.0
-sanic==22.6.0
+sanic==22.6.1
 sanic-routing==22.3.0
 six==1.16.0
 sniffio==1.2.0
