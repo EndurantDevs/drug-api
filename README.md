@@ -1,7 +1,7 @@
 # drug-api
 US Drugs API based on OpenFDA data, RxNorm and other sources.
 
-Docker Dev builds can pull:
+Docker Dev builds can be pulled from:
 ```shell
 docker pull dmytronikolayev/drugs-api
 ```
