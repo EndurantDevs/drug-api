@@ -24,7 +24,8 @@ with open(os.environ['HLTHPRT_LOG_CFG'], encoding="utf-8") as fobj:
 from process import process_group
 
 uvloop.install()
-
+api = Sanic("Drugs_API", env_prefix="HLTHPRT_")
+init_api(api)
 
 @click.command(help="Run sanic server")
 @click.option('--host', help='Setup host ip to listen up, default to 0.0.0.0', default='0.0.0.0')
@@ -40,10 +41,10 @@ def start(host, port, workers, debug, accesslog):
         sql_reset=False,
         sql_close_all=False
     )
-    api = Sanic(__name__, env_prefix="HLTHPRT_")
+    
     if debug:
         os.environ['HLTHPRT_DB_ECHO'] = 'True'
-    init_api(api)
+    
     with open(api.config['LOG_CFG']) as fobj:
         logging.config.dictConfig(yaml.safe_load(fobj))
     api.run(
@@ -51,6 +52,7 @@ def start(host, port, workers, debug, accesslog):
         port=port,
         workers=workers,
         debug=debug,
+        dev=debug,
         access_log=accesslog)
 
 
