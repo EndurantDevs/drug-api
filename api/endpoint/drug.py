@@ -37,8 +37,9 @@ async def drug_status(request):
 @blueprint.get('/ndc/<product_ndc>')
 async def product_ndc_obj(request, product_ndc):
     data = await Product.query.where(Product.product_ndc == product_ndc).gino.first()
-
-    return response.json(data.to_json_dict())
+    if data:
+        return response.json(data.to_json_dict())
+    raise sanic.exceptions.NotFound
 
 
 @blueprint.get('/ndc/<product_ndc>/packages')
@@ -65,7 +66,7 @@ async def product_packages_obj(request, product_ndc):
 
 
 @blueprint.get('/ndc/package/<package_ndc>')
-async def product_ndc_obj(request, package_ndc):
+async def package_product_ndc_obj(request, package_ndc):
     data = await Package.query.where(Package.package_ndc == package_ndc).gino.first()
     if data:
         obj = data.to_json_dict()
@@ -94,7 +95,7 @@ async def package_ndc_obj(request, package_ndc):
 
 
 @blueprint.get('/label/product/<product_ndc>')
-async def product_ndc_obj(request, product_ndc):
+async def label_product_ndc_obj(request, product_ndc):
     data = await Product.query.where(Product.product_ndc == product_ndc).gino.first()
     if data:
         obj = data.to_json_dict()
@@ -109,8 +110,10 @@ async def product_ndc_obj(request, product_ndc):
     raise sanic.exceptions.NotFound
 
 
-@blueprint.get('/list-product/all')
-async def list_product_all(request, letter='a', page=0, prefix='', separator='', suffix=''):
+@blueprint.get('/list-product/all', name='list_product_all')
+@blueprint.get('/list-product/all/<page:int>/', name='list_product_all_with_page')
+@blueprint.get('/list-product/all/<page:int>/<results_per_page:int>', name='list_product_all_with_page_and_results_per_page')
+async def list_product_all(request, letter='a', page=0, results_per_page = 49999, prefix='', separator='', suffix=''):
     for (key, value) in request.query_args:
         if key == 'prefix' and value:
             prefix = value
@@ -118,13 +121,12 @@ async def list_product_all(request, letter='a', page=0, prefix='', separator='',
             separator = value
         elif key == 'suffix' and value:
             suffix = value
-    results_per_page = 100000000
     if not letter or len(letter) > 1:
         raise sanic.exceptions.NotFound
     if not page or page<0:
         page = 0
 
-    data = ''
+    data = []
     q = db.select([Product.product_ndc, Product.generic_name, Product.brand_name]).order_by(Product.generic_name, Product.brand_name).limit(
         results_per_page).offset(results_per_page * page).gino
 
@@ -134,20 +136,25 @@ async def list_product_all(request, letter='a', page=0, prefix='', separator='',
         async for res in q.iterate():
             if res["generic_name"]:
                 name = res["generic_name"]
+
             if res["brand_name"] and res["generic_name"] and res['brand_name'].lower() != res['generic_name'].lower():
                 name = res["brand_name"]
-            if name:
-                data += f'{prefix}{quote(str(name.capitalize()), safe="")}{separator}{res["product_ndc"]}{suffix}\n'
+
+            obj = {'product_ndc': res['product_ndc'], 'name': name}
+            data.append(obj)
+            # if name:
+            #     data += f'{prefix}{quote(str(name.capitalize()), safe="")}{separator}{res["product_ndc"]}{suffix}\n'
 
     if data:
-        return response.text(data)
+        return response.json(data)
+
     raise sanic.exceptions.NotFound
 
 
-@blueprint.get('/list-product/<letter>')
-@blueprint.get('/list-product/<letter>/<page:int>')
-async def list_product_letter(request, letter, page=0):
-    results_per_page = 100
+@blueprint.get('/list-product/<letter>', name='list_product_letter')
+@blueprint.get('/list-product/<letter>/<page:int>', name='list_product_letter_with_page')
+@blueprint.get('/list-product/<letter>/<page:int>/<results_per_page:int>', name='list_product_letter_with_page_and_results_per_page')
+async def list_product_letter(request, letter, page=0, results_per_page = 100):
     if not letter or len(letter) > 1:
         raise sanic.exceptions.NotFound
     if not page or page<0:
@@ -168,9 +175,9 @@ async def list_product_letter(request, letter, page=0):
         return response.json(data)
     raise sanic.exceptions.NotFound
 
-@blueprint.get('/name/<product_name>/products')
-@blueprint.get('/name/<product_name>/generic_products')
-@blueprint.get('/name/<product_name>/brand_products')
+@blueprint.get('/name/<product_name>/products', name='product_data_by_name')
+@blueprint.get('/name/<product_name>/generic_products', name='product_data_by_generic_name')
+@blueprint.get('/name/<product_name>/brand_products', name='product_data_by_brand_name')
 async def product_data_by_name(request, product_name):
     product_name = urllib.parse.unquote(product_name).lower()
 
@@ -194,9 +201,9 @@ async def product_data_by_name(request, product_name):
     return response.json({'generic': generic_products, 'brand': brand_products})
 
 
-@blueprint.get('/name/<product_name>/packages')
-@blueprint.get('/name/<product_name>/generic_packages')
-@blueprint.get('/name/<product_name>/brand_packages')
+@blueprint.get('/name/<product_name>/packages', name='package_data_by_name')
+@blueprint.get('/name/<product_name>/generic_packages', name='package_data_by_generic_name')
+@blueprint.get('/name/<product_name>/brand_packages', name='package_data_by_brand_name')
 async def package_data_by_name(request, product_name):
 
     product_name = urllib.parse.unquote(product_name).lower()

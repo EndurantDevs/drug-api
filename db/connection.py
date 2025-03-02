@@ -5,7 +5,9 @@ from gino.strategies import GinoStrategy
 from gino.api import Gino as _Gino, GinoExecutor as _Executor
 from sqlalchemy.engine.url import URL
 from sanic.exceptions import NotFound
+from sqlalchemy.dialects import registry
 
+registry.register("myasyncpg", "db.dialects.asyncpg", "AsyncpgDialect")
 
 class SanicModelMixin:
     @classmethod
@@ -55,8 +57,10 @@ SanicStrategy()
 
 
 async def init_db(db, loop):
+    #registry.register("myasyncpg", myasyncpg, "myasyncpg")
+
     dsn = URL(
-        drivername=os.environ.get('HLTHPRT_DB_DRIVER', 'asyncpg'),
+        drivername=os.environ.get('HLTHPRT_DB_DRIVER', 'myasyncpg'),
         host=os.environ.get('HLTHPRT_DB_HOST', 'localhost'),
         port=os.environ.get('HLTHPRT_DB_PORT', 5432),
         username=os.environ.get('HLTHPRT_DB_USER', 'postgres'),
@@ -90,7 +94,7 @@ class Gino(_Gino):
 
     model_base_classes = _Gino.model_base_classes + (SanicModelMixin,)
     query_executor = GinoExecutor
-
+    
     def __init__(self, app=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if app is not None:
