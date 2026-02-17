@@ -1,6 +1,6 @@
 import json
+from datetime import date, datetime
 from uuid import UUID
-from datetime import datetime, date
 
 
 class JSONOutputMixin:

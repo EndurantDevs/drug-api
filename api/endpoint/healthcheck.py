@@ -1,9 +1,7 @@
 from datetime import datetime
 
-from asyncpg.exceptions import PostgresError
-from asyncpg.exceptions import InterfaceError
-from sanic import response
-from sanic import Blueprint
+from asyncpg.exceptions import InterfaceError, PostgresError
+from sanic import Blueprint, response
 
 from db.models import Product
 

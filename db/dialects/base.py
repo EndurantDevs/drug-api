@@ -1,11 +1,10 @@
 import asyncio
 import weakref
 
-from sqlalchemy import util
-
 # noinspection PyProtectedMember
-from gino.engine import _SAConnection, _SAEngine, _DBAPIConnection
+from gino.engine import _DBAPIConnection, _SAConnection, _SAEngine
 from gino.loader import Loader
+from sqlalchemy import util
 
 DEFAULT = object()
 

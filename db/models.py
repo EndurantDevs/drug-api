@@ -1,5 +1,7 @@
 import os
-from sqlalchemy import Column, String, BigInteger, Boolean, ARRAY, JSON, DATE, TEXT
+
+from sqlalchemy import DATE, JSON, TEXT, BigInteger, Boolean, Column, String
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from db.connection import db
 from db.json_mixin import JSONOutputMixin
@@ -31,6 +33,7 @@ class Product(db.Model, JSONOutputMixin):
     brand_name_base = Column(String)
     pharm_class = Column(ARRAY(String))
     dea_schedule = Column(String)
+    rxnorm_ids = Column(ARRAY(String))
 
 
 class Package(db.Model, JSONOutputMixin):

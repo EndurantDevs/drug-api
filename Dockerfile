@@ -9,7 +9,8 @@ RUN apt update && apt install -y libaio1 gcc git curl nginx && python3 -m venv v
         && rm -rf /wheels \
         && rm -rf /root/.cache/pip/* && \
         find . -name *.pyc -execdir rm -f {} \; \
-        && apt autoremove -y
+        && apt autoremove -y \
+        && ln -sfn /opt/venv /opt/venv313
 
 ARG HLTHPRT_LOG_CFG=./logging.yaml
 ARG HLTHPRT_RELEASE="dev"

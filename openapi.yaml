@@ -1,0 +1,1209 @@
+openapi: 3.0.3
+info:
+  title: Drugs API
+  version: 1.1.0
+  description: |
+    Detailed OpenAPI definition for the Sanic Drugs API.
+    All endpoints are read-only and are exposed under `/api/v1`.
+
+servers:
+  - url: http://127.0.0.1:8087
+    description: Local e2e target
+  - url: http://localhost:8080
+    description: Docker/nginx local target
+
+tags:
+  - name: Healthcheck
+    description: Service and database liveness
+  - name: Drug
+    description: Drug, package, label, search, and RxNorm endpoints
+
+paths:
+  /api/v1/healthcheck/:
+    get:
+      tags: [Healthcheck]
+      operationId: getHealthcheck
+      summary: Healthcheck status
+      description: Returns service metadata and a lightweight DB connectivity check.
+      responses:
+        '200':
+          description: Service and DB health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthcheckStatus'
+              examples:
+                ok:
+                  $ref: '#/components/examples/HealthcheckOk'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/:
+    get:
+      tags: [Drug]
+      operationId: getDrugStatus
+      summary: Drug API status
+      description: Returns service metadata and row counts for product and package tables.
+      responses:
+        '200':
+          description: Service metadata and counts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrugServiceStatus'
+              examples:
+                ok:
+                  $ref: '#/components/examples/DrugStatusOk'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/ndc/{product_ndc}:
+    get:
+      tags: [Drug]
+      operationId: getProductByNdc
+      summary: Get product by product NDC
+      parameters:
+        - $ref: '#/components/parameters/ProductNdcParam'
+      responses:
+        '200':
+          description: Product found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+              examples:
+                product:
+                  $ref: '#/components/examples/ProductExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/ndc/{product_ndc}/packages:
+    get:
+      tags: [Drug]
+      operationId: getPackagesByProductNdc
+      summary: Get packages by product NDC
+      parameters:
+        - $ref: '#/components/parameters/ProductNdcParam'
+      responses:
+        '200':
+          description: Packages for a product. Unknown product NDC returns an empty array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Package'
+              examples:
+                with_data:
+                  $ref: '#/components/examples/PackageListExample'
+                empty:
+                  $ref: '#/components/examples/EmptyArrayExample'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/ndc/package/{package_ndc}:
+    get:
+      tags: [Drug]
+      operationId: getPackageWithProductByPackageNdc
+      summary: Get package by package NDC and embed related product
+      parameters:
+        - $ref: '#/components/parameters/PackageNdcParam'
+      responses:
+        '200':
+          description: Package found with embedded product
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageWithProduct'
+              examples:
+                package_with_product:
+                  $ref: '#/components/examples/PackageWithProductExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/label/package/{package_ndc}:
+    get:
+      tags: [Drug]
+      operationId: getLabelByPackageNdc
+      summary: Get package + product and optional label by package NDC
+      parameters:
+        - $ref: '#/components/parameters/PackageNdcParam'
+      responses:
+        '200':
+          description: Package and product found; label may be omitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PackageWithProductAndOptionalLabel'
+              examples:
+                with_label:
+                  $ref: '#/components/examples/PackageWithProductAndLabelExample'
+                without_label:
+                  $ref: '#/components/examples/PackageWithProductExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/label/product/{product_ndc}:
+    get:
+      tags: [Drug]
+      operationId: getLabelByProductNdc
+      summary: Get product and optional label by product NDC
+      parameters:
+        - $ref: '#/components/parameters/ProductNdcParam'
+      responses:
+        '200':
+          description: Product found; label may be omitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductWithOptionalLabel'
+              examples:
+                with_optional_label:
+                  $ref: '#/components/examples/ProductWithOptionalLabelExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/list-product/all:
+    get:
+      tags: [Drug]
+      operationId: listProductsAll
+      summary: List all products
+      description: Returns a large product list with default pagination behavior.
+      parameters:
+        - $ref: '#/components/parameters/PrefixParam'
+        - $ref: '#/components/parameters/SeparatorParam'
+        - $ref: '#/components/parameters/SuffixParam'
+      responses:
+        '200':
+          description: Product list page
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductListItem'
+              examples:
+                products:
+                  $ref: '#/components/examples/ProductListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/list-product/all/{page}:
+    get:
+      tags: [Drug]
+      operationId: listProductsAllByPage
+      summary: List all products by page
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PrefixParam'
+        - $ref: '#/components/parameters/SeparatorParam'
+        - $ref: '#/components/parameters/SuffixParam'
+      responses:
+        '200':
+          description: Product list page
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductListItem'
+              examples:
+                products:
+                  $ref: '#/components/examples/ProductListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/list-product/all/{page}/{results_per_page}:
+    get:
+      tags: [Drug]
+      operationId: listProductsAllByPageAndSize
+      summary: List all products by page and page size
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/ResultsPerPageParam'
+        - $ref: '#/components/parameters/PrefixParam'
+        - $ref: '#/components/parameters/SeparatorParam'
+        - $ref: '#/components/parameters/SuffixParam'
+      responses:
+        '200':
+          description: Product list page
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductListItem'
+              examples:
+                products:
+                  $ref: '#/components/examples/ProductListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/list-product/{letter}:
+    get:
+      tags: [Drug]
+      operationId: listProductsByLetter
+      summary: List products by first letter
+      parameters:
+        - $ref: '#/components/parameters/LetterParam'
+      responses:
+        '200':
+          description: Product list filtered by first letter
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductListItem'
+              examples:
+                products:
+                  $ref: '#/components/examples/ProductListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/list-product/{letter}/{page}:
+    get:
+      tags: [Drug]
+      operationId: listProductsByLetterAndPage
+      summary: List products by first letter and page
+      parameters:
+        - $ref: '#/components/parameters/LetterParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Product list filtered by first letter
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductListItem'
+              examples:
+                products:
+                  $ref: '#/components/examples/ProductListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/list-product/{letter}/{page}/{results_per_page}:
+    get:
+      tags: [Drug]
+      operationId: listProductsByLetterPageAndSize
+      summary: List products by first letter, page, and page size
+      parameters:
+        - $ref: '#/components/parameters/LetterParam'
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/ResultsPerPageParam'
+      responses:
+        '200':
+          description: Product list filtered by first letter
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductListItem'
+              examples:
+                products:
+                  $ref: '#/components/examples/ProductListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/name/{product_name}/products:
+    get:
+      tags: [Drug]
+      operationId: getProductsByName
+      summary: Search products by name
+      description: Returns grouped generic and brand product matches.
+      parameters:
+        - $ref: '#/components/parameters/ProductNameParam'
+      responses:
+        '200':
+          description: Grouped product search result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NameProductsResponse'
+              examples:
+                products:
+                  $ref: '#/components/examples/NameProductsExample'
+                empty:
+                  $ref: '#/components/examples/EmptyNameProductsExample'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/name/{product_name}/generic_products:
+    get:
+      tags: [Drug]
+      operationId: getGenericProductsByName
+      summary: Search generic products by name
+      parameters:
+        - $ref: '#/components/parameters/ProductNameParam'
+      responses:
+        '200':
+          description: Grouped product search result with `brand` bucket empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NameProductsResponse'
+              examples:
+                generic_only:
+                  $ref: '#/components/examples/NameProductsGenericOnlyExample'
+                empty:
+                  $ref: '#/components/examples/EmptyNameProductsExample'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/name/{product_name}/brand_products:
+    get:
+      tags: [Drug]
+      operationId: getBrandProductsByName
+      summary: Search brand products by name
+      parameters:
+        - $ref: '#/components/parameters/ProductNameParam'
+      responses:
+        '200':
+          description: Grouped product search result with `generic` bucket empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NameProductsResponse'
+              examples:
+                brand_only:
+                  $ref: '#/components/examples/NameProductsBrandOnlyExample'
+                empty:
+                  $ref: '#/components/examples/EmptyNameProductsExample'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/name/{product_name}/packages:
+    get:
+      tags: [Drug]
+      operationId: getPackagesByName
+      summary: Search packages by name
+      description: Returns grouped generic and brand package matches.
+      parameters:
+        - $ref: '#/components/parameters/ProductNameParam'
+      responses:
+        '200':
+          description: Grouped package search result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamePackagesResponse'
+              examples:
+                packages:
+                  $ref: '#/components/examples/NamePackagesExample'
+                empty:
+                  $ref: '#/components/examples/EmptyNamePackagesExample'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/name/{product_name}/generic_packages:
+    get:
+      tags: [Drug]
+      operationId: getGenericPackagesByName
+      summary: Search generic packages by name
+      parameters:
+        - $ref: '#/components/parameters/ProductNameParam'
+      responses:
+        '200':
+          description: Grouped package search result with `brand` bucket empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamePackagesResponse'
+              examples:
+                generic_only:
+                  $ref: '#/components/examples/NamePackagesGenericOnlyExample'
+                empty:
+                  $ref: '#/components/examples/EmptyNamePackagesExample'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/name/{product_name}/brand_packages:
+    get:
+      tags: [Drug]
+      operationId: getBrandPackagesByName
+      summary: Search brand packages by name
+      parameters:
+        - $ref: '#/components/parameters/ProductNameParam'
+      responses:
+        '200':
+          description: Grouped package search result with `generic` bucket empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamePackagesResponse'
+              examples:
+                brand_only:
+                  $ref: '#/components/examples/NamePackagesBrandOnlyExample'
+                empty:
+                  $ref: '#/components/examples/EmptyNamePackagesExample'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/rxnorm/{rxnorm_id}/products:
+    get:
+      tags: [Drug]
+      operationId: getProductsByRxNorm
+      summary: Get products by RxNorm ID
+      parameters:
+        - $ref: '#/components/parameters/RxnormIdParam'
+      responses:
+        '200':
+          description: Product list with matching RxNorm ID
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
+              examples:
+                products:
+                  $ref: '#/components/examples/RxnormProductsExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/rxnorm/{rxnorm_id}/packages:
+    get:
+      tags: [Drug]
+      operationId: getPackagesByRxNorm
+      summary: Get packages by RxNorm ID
+      parameters:
+        - $ref: '#/components/parameters/RxnormIdParam'
+      responses:
+        '200':
+          description: Package list linked to products with matching RxNorm ID
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Package'
+              examples:
+                packages:
+                  $ref: '#/components/examples/RxnormPackagesExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+components:
+  parameters:
+    ProductNdcParam:
+      name: product_ndc
+      in: path
+      required: true
+      description: Product NDC code.
+      schema:
+        type: string
+      example: '51662-1407'
+
+    PackageNdcParam:
+      name: package_ndc
+      in: path
+      required: true
+      description: Package NDC code.
+      schema:
+        type: string
+      example: '51662-1407-1'
+
+    RxnormIdParam:
+      name: rxnorm_id
+      in: path
+      required: true
+      description: RxNorm identifier.
+      schema:
+        type: string
+      example: '992801'
+
+    ProductNameParam:
+      name: product_name
+      in: path
+      required: true
+      description: URL-encoded product name; search is case-insensitive.
+      schema:
+        type: string
+      example: aspirin
+
+    LetterParam:
+      name: letter
+      in: path
+      required: true
+      description: First-letter filter.
+      schema:
+        type: string
+        pattern: '^[A-Za-z]$'
+      example: a
+
+    PageParam:
+      name: page
+      in: path
+      required: true
+      description: Zero-based page index. Negative values are accepted and treated as zero by the implementation.
+      schema:
+        type: integer
+      example: 0
+
+    ResultsPerPageParam:
+      name: results_per_page
+      in: path
+      required: true
+      description: Maximum records per page.
+      schema:
+        type: integer
+        minimum: 1
+      example: 25
+
+    PrefixParam:
+      name: prefix
+      in: query
+      required: false
+      description: Parsed by API but currently not applied to output formatting.
+      schema:
+        type: string
+      example: p
+
+    SeparatorParam:
+      name: separator
+      in: query
+      required: false
+      description: Parsed by API but currently not applied to output formatting.
+      schema:
+        type: string
+      example: ':'
+
+    SuffixParam:
+      name: suffix
+      in: query
+      required: false
+      description: Parsed by API but currently not applied to output formatting.
+      schema:
+        type: string
+      example: s
+
+  responses:
+    NotFoundJson:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/NotFoundResponse'
+          examples:
+            not_found:
+              $ref: '#/components/examples/NotFoundExample'
+
+    InternalErrorJson:
+      description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            internal_error:
+              $ref: '#/components/examples/InternalErrorExample'
+
+  schemas:
+    HealthcheckStatus:
+      type: object
+      required: [date, release, environment, database]
+      properties:
+        date:
+          type: string
+          description: UTC timestamp from server.
+          example: '2026-02-13T13:37:12.402748'
+        release:
+          type: string
+          nullable: true
+          example: dev
+        environment:
+          type: string
+          nullable: true
+          example: test
+        database:
+          type: object
+          required: [status]
+          properties:
+            status:
+              type: string
+              enum: [OK, Fail]
+            details:
+              type: string
+              nullable: true
+
+    DrugServiceStatus:
+      type: object
+      required: [date, release, environment, product_count, package_count]
+      properties:
+        date:
+          type: string
+          description: UTC timestamp from server.
+          example: '2026-02-13T13:37:12.611248'
+        release:
+          type: string
+          nullable: true
+          example: dev
+        environment:
+          type: string
+          nullable: true
+          example: test
+        product_count:
+          type: integer
+          format: int64
+          example: 131196
+        package_count:
+          type: integer
+          format: int64
+          example: 244932
+
+    Product:
+      type: object
+      required: [product_id]
+      properties:
+        product_ndc:
+          type: string
+          nullable: true
+        generic_name:
+          type: string
+          nullable: true
+        labeler_name:
+          type: string
+          nullable: true
+        brand_name:
+          type: string
+          nullable: true
+        active_ingredients:
+          type: array
+          nullable: true
+          items:
+            type: object
+            additionalProperties: true
+        finished:
+          type: boolean
+          nullable: true
+        listing_expiration_date:
+          type: string
+          nullable: true
+          description: Date serialized by API with trailing `Z`.
+        openfda:
+          type: object
+          nullable: true
+          additionalProperties: true
+        marketing_category:
+          type: string
+          nullable: true
+        dosage_form:
+          type: string
+          nullable: true
+        short_dosage_form:
+          type: string
+          nullable: true
+        spl_id:
+          type: string
+          nullable: true
+        product_type:
+          type: string
+          nullable: true
+        route:
+          type: array
+          nullable: true
+          items:
+            type: string
+        marketing_start_date:
+          type: string
+          nullable: true
+          description: Date serialized by API with trailing `Z`.
+        marketing_end_date:
+          type: string
+          nullable: true
+          description: Date serialized by API with trailing `Z`.
+        product_id:
+          type: string
+        application_number:
+          type: string
+          nullable: true
+        brand_name_base:
+          type: string
+          nullable: true
+        pharm_class:
+          type: array
+          nullable: true
+          items:
+            type: string
+        dea_schedule:
+          type: string
+          nullable: true
+        rxnorm_ids:
+          type: array
+          nullable: true
+          items:
+            type: string
+
+    Package:
+      type: object
+      required: [package_ndc]
+      properties:
+        package_ndc:
+          type: string
+        ndc11:
+          type: string
+          nullable: true
+        product_ndc:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        size:
+          type: integer
+          format: int64
+          nullable: true
+        size_extra:
+          type: string
+          nullable: true
+        packages_number:
+          type: integer
+          format: int64
+          nullable: true
+        package_format:
+          type: string
+          nullable: true
+        marketing_start_date:
+          type: string
+          nullable: true
+          description: Date serialized by API with trailing `Z`.
+        sample:
+          type: boolean
+          nullable: true
+
+    Label:
+      type: object
+      description: Label payload. Model supports many optional text fields.
+      properties:
+        id:
+          type: string
+          nullable: true
+        set_id:
+          type: string
+          nullable: true
+        version:
+          type: string
+          nullable: true
+        openfda:
+          type: object
+          nullable: true
+          additionalProperties: true
+        product_ndc:
+          type: array
+          nullable: true
+          items:
+            type: string
+        package_ndc:
+          type: array
+          nullable: true
+          items:
+            type: string
+      additionalProperties: true
+
+    PackageWithProduct:
+      allOf:
+        - $ref: '#/components/schemas/Package'
+        - type: object
+          required: [product]
+          properties:
+            product:
+              $ref: '#/components/schemas/Product'
+
+    PackageWithProductAndOptionalLabel:
+      allOf:
+        - $ref: '#/components/schemas/PackageWithProduct'
+        - type: object
+          properties:
+            label:
+              $ref: '#/components/schemas/Label'
+
+    ProductWithOptionalLabel:
+      allOf:
+        - $ref: '#/components/schemas/Product'
+        - type: object
+          properties:
+            label:
+              $ref: '#/components/schemas/Label'
+
+    ProductListItem:
+      type: object
+      required: [product_ndc, name]
+      properties:
+        product_ndc:
+          type: string
+        name:
+          type: string
+
+    NameProductItem:
+      type: object
+      properties:
+        generic_name:
+          type: string
+          nullable: true
+        brand_name:
+          type: string
+          nullable: true
+        dosage_form:
+          type: string
+          nullable: true
+        product_ndc:
+          type: string
+          nullable: true
+        labeler_name:
+          type: string
+          nullable: true
+
+    NameProductsResponse:
+      type: object
+      required: [generic, brand]
+      properties:
+        generic:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameProductItem'
+        brand:
+          type: array
+          items:
+            $ref: '#/components/schemas/NameProductItem'
+
+    NamePackageItem:
+      type: object
+      properties:
+        generic_name:
+          type: string
+          nullable: true
+        brand_name:
+          type: string
+          nullable: true
+        dosage_form:
+          type: string
+          nullable: true
+        short_dosage_form:
+          type: string
+          nullable: true
+        package_ndc:
+          type: string
+          nullable: true
+        package_description:
+          type: string
+          nullable: true
+        size:
+          type: integer
+          format: int64
+          nullable: true
+        size_extra:
+          type: string
+          nullable: true
+        packages_number:
+          type: integer
+          format: int64
+          nullable: true
+        package_format:
+          type: string
+          nullable: true
+
+    NamePackagesResponse:
+      type: object
+      required: [generic, brand]
+      properties:
+        generic:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamePackageItem'
+        brand:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamePackageItem'
+
+    NotFoundResponse:
+      type: object
+      required: [description, status, message]
+      properties:
+        description:
+          type: string
+          example: Not Found
+        status:
+          type: integer
+          example: 404
+        message:
+          type: string
+          example: Not Found
+
+    ErrorResponse:
+      type: object
+      description: Generic Sanic internal error payload shape.
+      additionalProperties: true
+
+  examples:
+    HealthcheckOk:
+      summary: Healthy DB and service
+      value:
+        date: '2026-02-13T13:37:12.402748'
+        release: dev
+        environment: test
+        database:
+          status: OK
+
+    DrugStatusOk:
+      summary: Service counts example
+      value:
+        date: '2026-02-13T13:37:12.611248'
+        release: dev
+        environment: test
+        product_count: 131196
+        package_count: 244932
+
+    ProductExample:
+      summary: Product payload example
+      value:
+        product_ndc: '51662-1407'
+        generic_name: CHLOROPROCAINE HYDROCHLORIDE
+        labeler_name: Hospira, Inc.
+        brand_name: CHLOROPROCAINE HCI
+        dosage_form: INJECTION
+        short_dosage_form: INJECTION
+        product_id: '51662-1407_01'
+        rxnorm_ids: ['992801']
+
+    PackageExample:
+      summary: Package payload example
+      value:
+        package_ndc: '51662-1407-1'
+        ndc11: '51662140701'
+        product_ndc: '51662-1407'
+        description: 1 VIAL in 1 CARTON
+        size: 1
+        size_extra: VIAL
+        packages_number: 1
+        package_format: CARTON
+
+    PackageListExample:
+      summary: Package list example
+      value:
+        - package_ndc: '51662-1407-1'
+          ndc11: '51662140701'
+          product_ndc: '51662-1407'
+          description: 1 VIAL in 1 CARTON
+        - package_ndc: '51662-1407-2'
+          ndc11: '51662140702'
+          product_ndc: '51662-1407'
+          description: 10 VIAL in 1 CARTON
+
+    PackageWithProductExample:
+      summary: Package with nested product
+      value:
+        package_ndc: '51662-1407-1'
+        ndc11: '51662140701'
+        product_ndc: '51662-1407'
+        description: 1 VIAL in 1 CARTON
+        product:
+          product_ndc: '51662-1407'
+          generic_name: CHLOROPROCAINE HYDROCHLORIDE
+          brand_name: CHLOROPROCAINE HCI
+          product_id: '51662-1407_01'
+          rxnorm_ids: ['992801']
+
+    PackageWithProductAndLabelExample:
+      summary: Package with nested product and label
+      value:
+        package_ndc: '51662-1407-1'
+        ndc11: '51662140701'
+        product_ndc: '51662-1407'
+        product:
+          product_ndc: '51662-1407'
+          generic_name: CHLOROPROCAINE HYDROCHLORIDE
+          brand_name: CHLOROPROCAINE HCI
+          product_id: '51662-1407_01'
+          rxnorm_ids: ['992801']
+        label:
+          id: '101e2af0-c51e-edc4-e063-6394a90a8b8c'
+          set_id: '101e2af0-c51e-edc4-e063-6394a90a8b8c'
+
+    ProductWithOptionalLabelExample:
+      summary: Product with optional label
+      value:
+        product_ndc: '51662-1407'
+        generic_name: CHLOROPROCAINE HYDROCHLORIDE
+        brand_name: CHLOROPROCAINE HCI
+        product_id: '51662-1407_01'
+        rxnorm_ids: ['992801']
+        label:
+          id: '101e2af0-c51e-edc4-e063-6394a90a8b8c'
+
+    ProductListExample:
+      summary: Product list example
+      value:
+        - product_ndc: '51662-1407'
+          name: '(CHLOROPROCAINE HCI'
+        - product_ndc: '71429-502'
+          name: '(Ge-68) GERMANIUM CHLORIDE / (Ga-68) GALLIUM CHLORIDE'
+
+    NameProductsExample:
+      summary: Combined generic/brand products
+      value:
+        generic:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN
+            dosage_form: TABLET
+            product_ndc: '59779-841'
+            labeler_name: Example Labeler
+        brand:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN LOW DOSE
+            dosage_form: TABLET
+            product_ndc: '63083-2082'
+            labeler_name: Example Labeler
+
+    NameProductsGenericOnlyExample:
+      summary: Generic-only response bucket
+      value:
+        generic:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN
+            dosage_form: TABLET
+            product_ndc: '59779-841'
+            labeler_name: Example Labeler
+        brand: []
+
+    NameProductsBrandOnlyExample:
+      summary: Brand-only response bucket
+      value:
+        generic: []
+        brand:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN LOW DOSE
+            dosage_form: TABLET
+            product_ndc: '63083-2082'
+            labeler_name: Example Labeler
+
+    NamePackagesExample:
+      summary: Combined generic/brand packages
+      value:
+        generic:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN
+            dosage_form: TABLET
+            short_dosage_form: TABLET
+            package_ndc: '59779-841-10'
+            package_description: 100 TABLET in 1 BOTTLE
+            size: 100
+            size_extra: TABLET
+            packages_number: 1
+            package_format: BOTTLE
+        brand:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN LOW DOSE
+            dosage_form: TABLET
+            short_dosage_form: TABLET
+            package_ndc: '63083-2082-30'
+            package_description: 30 TABLET in 1 BOTTLE
+            size: 30
+            size_extra: TABLET
+            packages_number: 1
+            package_format: BOTTLE
+
+    NamePackagesGenericOnlyExample:
+      summary: Generic-only package bucket
+      value:
+        generic:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN
+            dosage_form: TABLET
+            short_dosage_form: TABLET
+            package_ndc: '59779-841-10'
+            package_description: 100 TABLET in 1 BOTTLE
+            size: 100
+            size_extra: TABLET
+            packages_number: 1
+            package_format: BOTTLE
+        brand: []
+
+    NamePackagesBrandOnlyExample:
+      summary: Brand-only package bucket
+      value:
+        generic: []
+        brand:
+          - generic_name: ASPIRIN
+            brand_name: ASPIRIN LOW DOSE
+            dosage_form: TABLET
+            short_dosage_form: TABLET
+            package_ndc: '63083-2082-30'
+            package_description: 30 TABLET in 1 BOTTLE
+            size: 30
+            size_extra: TABLET
+            packages_number: 1
+            package_format: BOTTLE
+
+    EmptyNameProductsExample:
+      summary: Name search with no matches
+      value:
+        generic: []
+        brand: []
+
+    EmptyNamePackagesExample:
+      summary: Name package search with no matches
+      value:
+        generic: []
+        brand: []
+
+    RxnormProductsExample:
+      summary: RxNorm matched products
+      value:
+        - product_ndc: '51662-1407'
+          generic_name: CHLOROPROCAINE HYDROCHLORIDE
+          brand_name: CHLOROPROCAINE HCI
+          product_id: '51662-1407_01'
+          rxnorm_ids: ['992801']
+
+    RxnormPackagesExample:
+      summary: RxNorm matched packages
+      value:
+        - package_ndc: '51662-1407-1'
+          ndc11: '51662140701'
+          product_ndc: '51662-1407'
+          description: 1 VIAL in 1 CARTON
+
+    NotFoundExample:
+      summary: Standard not-found response
+      value:
+        description: Not Found
+        status: 404
+        message: Not Found
+
+    InternalErrorExample:
+      summary: Generic internal error response
+      value:
+        description: Internal Server Error
+        status: 500
+        message: Internal Server Error
+
+    EmptyArrayExample:
+      summary: Empty array response
+      value: []

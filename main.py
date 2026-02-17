@@ -1,20 +1,20 @@
 #!/usr/bin/env python
-import os
+import asyncio
 import logging.config
+import os
 from pathlib import Path
-import yaml
+
+import arq.cli
 import click
 import uvloop
+import yaml
 from asyncpg import connection
 from asyncpg.connection import ServerCapabilities
-from sanic import Sanic
-from api import init_api
-
 from dotenv import load_dotenv
-import arq.cli
+from sanic import Sanic
 
+from api import init_api
 from db.migrator import db_group
-
 
 env_path = Path(__file__).absolute().parent / '.env'
 load_dotenv(dotenv_path=env_path)
@@ -24,6 +24,17 @@ with open(os.environ['HLTHPRT_LOG_CFG'], encoding="utf-8") as fobj:
 from process import process_group
 
 uvloop.install()
+
+
+def _ensure_default_event_loop() -> None:
+    """Python 3.13+ may not have a current loop for CLI worker entrypoints."""
+    try:
+        asyncio.get_running_loop()
+        return
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+
 api = Sanic("Drugs_API", env_prefix="HLTHPRT_")
 init_api(api)
 
@@ -75,4 +86,5 @@ cli.add_command(arq.cli.cli, name="worker")
 
 
 if __name__ == '__main__':
+    _ensure_default_event_loop()
     cli()

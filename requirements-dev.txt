@@ -1,5 +1,5 @@
 sanic
-git+https://github.com/samuelcolvin/arq
+arq==0.27.0
 gino
 python-dotenv
 alembic
@@ -12,3 +12,8 @@ humanize
 pyaml
 pytz
 msgpack
+flake8
+pylint
+isort
+pytest
+pytest-asyncio

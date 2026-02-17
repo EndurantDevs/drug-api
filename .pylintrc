@@ -1,7 +1,7 @@
 [FORMAT]
 max-line-length=120
 [MESSAGES CONTROL]
-disable=redefined-outer-name,unused-argument,missing-docstring,C0103,protected-access,R0903,R0201,abstract-class-instantiated
+disable=redefined-outer-name,unused-argument,missing-docstring,C0103,protected-access,R0903,abstract-class-instantiated
 
 [TYPECHECK]
 ignored-classes=_Gino
@@ -19,4 +19,3 @@ ignore-docstrings=yes
 
 # Ignore imports when computing similarities.
 ignore-imports=yes
-

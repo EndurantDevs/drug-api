@@ -1,25 +1,30 @@
-import datetime
 import asyncio
+import datetime
 import os
 import re
 import tempfile
-import msgpack
-from pathlib import Path, PurePath
 from json import loads
+from pathlib import Path, PurePath
+
+import ijson
+import msgpack
+from aiofile import async_open
 from arq import create_pool
 from arq.connections import RedisSettings
-from sqlalchemy.inspection import inspect
-import ijson
-from dateutil.parser import parse as parse_date
-from aiofile import async_open
 from async_unzip.unzipper import unzip
+from dateutil.parser import parse as parse_date
+from sqlalchemy.inspection import inspect
 
-
-from process.ext.utils import download_it, download_it_and_save, make_class, push_objects, print_time_info
-from db.models import Product, Package, db
 from db.connection import init_db
+from db.models import Package, Product, db
+from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
 
 product_description_re = re.compile(r'(\d+) (.*?) in (\d+) (.*?) \(\d+-\d+-\d+\)')
+NDC_QUEUE_NAME = (
+    os.environ.get('HLTHPRT_ARQ_QUEUE_NDC')
+    or os.environ.get('ARQ_QUEUE_NDC')
+    or 'arq:queue:drug-api-import-ndc'
+)
 
 
 async def download_content(ctx, task):
@@ -71,6 +76,9 @@ async def process_results(ctx, task):
                 obj[col] = res.get(col)
             elif col not in obj:
                 obj[col] = None
+        openfda_payload = res.get('openfda') or {}
+        rxnorm_values = openfda_payload.get('rxcui') or []
+        obj['rxnorm_ids'] = [str(value) for value in rxnorm_values]
 
         if not ('dosage_form' in obj) and obj['dosage_form']:
             obj['dosage_form'] = ''
@@ -165,6 +173,10 @@ async def shutdown(ctx):
                         await db.status(f"CREATE INDEX {table}_idx_generic_trgm_idx_{import_date} ON "
                                         f"{db_schema}.{table}_{import_date} USING "
                                         f"GIN(generic_name {db_schema}.gin_trgm_ops);")
+                        await db.status(
+                            f"CREATE INDEX product_rxnorm_idx_{import_date} ON "
+                            f"{db_schema}.product_{import_date} USING GIN(rxnorm_ids);"
+                        )
 
                     await db.status(f"ALTER INDEX IF EXISTS "
                                     f"{db_schema}.{table}_idx_product_ndc RENAME TO "
@@ -177,6 +189,9 @@ async def shutdown(ctx):
                         await db.status(f"ALTER INDEX IF EXISTS "
                                         f"{db_schema}.{table}_idx_generic_trgm_idx RENAME TO "
                                         f"{table}_idx_generic_trgm_idx_old;")
+                        await db.status(f"ALTER INDEX IF EXISTS "
+                                        f"{db_schema}.product_rxnorm_idx RENAME TO "
+                                        f"product_rxnorm_idx_old;")
 
                         await db.status(f"ALTER INDEX IF EXISTS "
                                         f"{db_schema}.{table}_idx_brand_trgm_idx_{import_date} RENAME TO "
@@ -184,6 +199,9 @@ async def shutdown(ctx):
                         await db.status(f"ALTER INDEX IF EXISTS "
                                         f"{db_schema}.{table}_idx_generic_trgm_idx_{import_date} RENAME TO "
                                         f"{table}_idx_generic_trgm_idx;")
+                        await db.status(f"ALTER INDEX IF EXISTS "
+                                        f"{db_schema}.product_rxnorm_idx_{import_date} RENAME TO "
+                                        f"product_rxnorm_idx;")
 
                     await db.status(f"ALTER INDEX IF EXISTS "
                                     f"{db_schema}.{table}_idx_product_ndc_{import_date} RENAME TO "
@@ -205,6 +223,7 @@ async def shutdown(ctx):
 
 async def init_file(ctx):
     redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              default_queue_name=NDC_QUEUE_NAME,
                               job_serializer=msgpack.packb,
                               job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
     print('Downloading data from: ', os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
@@ -220,6 +239,7 @@ async def init_file(ctx):
 
 async def main():
     redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              default_queue_name=NDC_QUEUE_NAME,
                               job_serializer=msgpack.packb,
                               job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
     x = await redis.enqueue_job('init_file')
