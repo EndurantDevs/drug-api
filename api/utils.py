@@ -1,4 +1,4 @@
-from db.models import db, Product, Package
+from db.models import Package, Product, db
 
 
 async def get_generic_packages(product_name):
@@ -108,3 +108,18 @@ async def get_brand_products(product_name):
                 obj[result_names[i]] = package[i]
             data.append(obj)
     return data
+
+
+async def get_products_by_rxnorm(rxnorm_id):
+    rows = await Product.query.where(Product.rxnorm_ids.contains([rxnorm_id])).gino.all()
+    return [row.to_json_dict() for row in rows]
+
+
+async def get_packages_by_rxnorm(rxnorm_id):
+    products = await db.select([Product.product_ndc]).where(Product.rxnorm_ids.contains([rxnorm_id])).gino.all()
+    product_ids = [row[0] for row in products if row and row[0]]
+    product_ids = [pid for pid in product_ids if pid]
+    if not product_ids:
+        return []
+    packages = await Package.query.where(Package.product_ndc.in_(product_ids)).gino.all()
+    return [pkg.to_json_dict() for pkg in packages]

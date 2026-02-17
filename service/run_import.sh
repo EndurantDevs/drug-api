@@ -1,5 +1,9 @@
 #!/bin/sh
+set -e
 
-. ./venv/bin/activate
+cd /opt
 
-python main.py start ndc &&  python main.py worker process.NDC --burst && python main.py start label &&  python main.py worker process.Labeling --burst
+/opt/venv/bin/python /opt/main.py start ndc
+/opt/venv/bin/python /opt/main.py worker process.NDC --burst
+/opt/venv/bin/python /opt/main.py start label
+/opt/venv/bin/python /opt/main.py worker process.Labeling --burst

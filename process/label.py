@@ -1,22 +1,28 @@
-import datetime
 import asyncio
+import datetime
 import os
 import tempfile
-import msgpack
-from pathlib import Path, PurePath
 from json import loads
+from pathlib import Path, PurePath
+
+import ijson
+import msgpack
+from aiofile import async_open
 from arq import create_pool
 from arq.connections import RedisSettings
-from sqlalchemy.inspection import inspect
-from dateutil.parser import parse as parse_date
-from aiofile import async_open
-import ijson
 from async_unzip.unzipper import unzip
+from dateutil.parser import parse as parse_date
+from sqlalchemy.inspection import inspect
 
-
-from process.ext.utils import download_it, download_it_and_save, make_class, push_objects, print_time_info
-from db.models import Label, db
 from db.connection import init_db
+from db.models import Label, db
+from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
+
+LABEL_QUEUE_NAME = (
+    os.environ.get('HLTHPRT_ARQ_QUEUE_LABEL')
+    or os.environ.get('ARQ_QUEUE_LABEL')
+    or 'arq:queue:drug-api-import-label'
+)
 
 
 async def download_label_content(ctx, task):
@@ -150,6 +156,7 @@ async def label_shutdown(ctx):
 
 async def init_label_file(ctx):
     redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              default_queue_name=LABEL_QUEUE_NAME,
                               job_serializer=msgpack.packb,
                               job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
 
@@ -164,6 +171,7 @@ async def init_label_file(ctx):
 
 async def main():
     redis = await create_pool(RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS')),
+                              default_queue_name=LABEL_QUEUE_NAME,
                               job_serializer=msgpack.packb,
                               job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
     await redis.enqueue_job('init_label_file')

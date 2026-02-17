@@ -1,4 +1,7 @@
 #!/bin/sh
-. venv/bin/activate
+set -e
 
-nginx && python main.py server start --host 127.0.0.1 --port 8081
+cd /opt
+
+nginx
+exec /opt/venv/bin/python /opt/main.py server start --host 127.0.0.1 --port 8081

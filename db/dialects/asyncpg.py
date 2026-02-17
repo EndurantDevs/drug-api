@@ -4,21 +4,9 @@ import time
 import warnings
 
 import asyncpg
-from sqlalchemy import util, exc, sql
-from sqlalchemy.dialects.postgresql import (  # noqa: F401
-    ARRAY,
-    CreateEnumType,
-    DropEnumType,
-    JSON,
-    JSONB,
-    json,
-)
-from sqlalchemy.dialects.postgresql.base import (
-    ENUM,
-    PGCompiler,
-    PGDialect,
-    PGExecutionContext,
-)
+from sqlalchemy import exc, sql, util
+from sqlalchemy.dialects.postgresql import ARRAY, JSON, JSONB, CreateEnumType, DropEnumType, json  # noqa: F401
+from sqlalchemy.dialects.postgresql.base import ENUM, PGCompiler, PGDialect, PGExecutionContext
 from sqlalchemy.sql import sqltypes
 
 from . import base

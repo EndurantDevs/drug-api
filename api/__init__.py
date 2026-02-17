@@ -1,7 +1,8 @@
 from sanic.blueprints import Blueprint
-from db.connection import db
-from api.endpoint.healthcheck import blueprint as v1_healthcheck
+
 from api.endpoint.drug import blueprint as v1_drug
+from api.endpoint.healthcheck import blueprint as v1_healthcheck
+from db.connection import db
 
 
 def init_api(api):

@@ -1,10 +1,11 @@
 import datetime
+
 import httpx
-from gino.exceptions import GinoException
-from asyncpg.exceptions import UniqueViolationError
+import humanize
 from aiofile import async_open
 from arq import Retry
-import humanize
+from asyncpg.exceptions import UniqueViolationError
+from gino.exceptions import GinoException
 
 HTTP_CHUNK_SIZE = 512 * 1024
 headers = {'user-agent': 'Healthporta Drug API Importer, https://github.com/EndurantDevs/drug-api'}

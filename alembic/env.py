@@ -1,13 +1,10 @@
 import logging
+import os
 from logging.config import fileConfig
-
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
 
 from alembic import context
 from db.models import db
-import os
-
+from sqlalchemy import engine_from_config, pool
 
 
 
@@ -27,6 +24,14 @@ target_metadata = db
 
 
 exclude_tables = [name.strip() for name in config.get_section('alembic:exclude', {}).get('tables', '').split(',')]
+
+
+def get_db_env(key, default=None):
+    value = os.environ.get(key)
+    if value is not None:
+        return value
+    return os.environ.get(f'HLTHPRT_{key}', default)
+
 
 def include_object(object, name, type_, reflected, compare_to):
     if type_ == "table" and name in exclude_tables:
@@ -56,11 +61,11 @@ def run_migrations_offline():
     """
     # url = config.get_main_option("sqlalchemy.url")
     url = 'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_database}'. \
-        format(db_user=os.environ.get("DB_USER"),
-               db_password=os.environ.get("DB_PASSWORD"),
-               db_host=os.environ.get("DB_HOST"),
-               db_database=os.environ.get("DB_DATABASE"),
-               db_port=os.environ.get("DB_PORT"))
+        format(db_user=get_db_env("DB_USER"),
+               db_password=get_db_env("DB_PASSWORD"),
+               db_host=get_db_env("DB_HOST"),
+               db_database=get_db_env("DB_DATABASE"),
+               db_port=get_db_env("DB_PORT"))
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -81,11 +86,11 @@ def run_migrations_online():
     """
 
     url = 'postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_database}'. \
-        format(db_user=os.environ.get("DB_USER"),
-               db_password=os.environ.get("DB_PASSWORD"),
-               db_host=os.environ.get("DB_HOST"),
-               db_database=os.environ.get("DB_DATABASE"),
-               db_port=os.environ.get("DB_PORT"))
+        format(db_user=get_db_env("DB_USER"),
+               db_password=get_db_env("DB_PASSWORD"),
+               db_host=get_db_env("DB_HOST"),
+               db_database=get_db_env("DB_DATABASE"),
+               db_port=get_db_env("DB_PORT"))
     config_dict = {
         'sqlalchemy.url': url,
         'sqlalchemy.connect_args': {'options': f"-c search_path=rx_data,public"}
@@ -108,7 +113,7 @@ def run_migrations_online():
             compare_server_default=True,
         )
         with context.begin_transaction():
-            if os.environ.get('ENVIRONMENT') == 'test':
+            if get_db_env('ENVIRONMENT') == 'test':
                 context.execute('create schema if not exists rx_data')
 
             context.execute('SET search_path TO rx_data,public')

@@ -1,11 +1,14 @@
 # pylint: disable = unused-variable
 import os
-from gino.engine import GinoConnection as _Connection, GinoEngine as _Engine
+
+from gino.api import Gino as _Gino
+from gino.api import GinoExecutor as _Executor
+from gino.engine import GinoConnection as _Connection
+from gino.engine import GinoEngine as _Engine
 from gino.strategies import GinoStrategy
-from gino.api import Gino as _Gino, GinoExecutor as _Executor
-from sqlalchemy.engine.url import URL
 from sanic.exceptions import NotFound
 from sqlalchemy.dialects import registry
+from sqlalchemy.engine.url import URL
 
 registry.register("myasyncpg", "db.dialects.asyncpg", "AsyncpgDialect")
 

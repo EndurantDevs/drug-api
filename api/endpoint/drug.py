@@ -1,13 +1,13 @@
 import asyncio
-from datetime import datetime
 import urllib.parse
+from datetime import datetime
 
 import sanic.exceptions
-from sanic import response
-from sanic import Blueprint
+from sanic import Blueprint, response
 
-from db.models import db, Product, Package, Label
-from api.utils import get_brand_products, get_brand_packages, get_generic_products, get_generic_packages
+from api.utils import (get_brand_packages, get_brand_products, get_generic_packages, get_generic_products,
+                       get_packages_by_rxnorm, get_products_by_rxnorm)
+from db.models import Label, Package, Product, db
 
 blueprint = Blueprint('drug', url_prefix='/drug', version=1)
 
@@ -132,11 +132,8 @@ async def list_product_all(request, letter='a', page=0, results_per_page = 49999
 
 
     async with db.transaction():
-        from urllib.parse import quote
         async for res in q.iterate():
-            if res["generic_name"]:
-                name = res["generic_name"]
-
+            name = res["generic_name"] or res["brand_name"] or ""
             if res["brand_name"] and res["generic_name"] and res['brand_name'].lower() != res['generic_name'].lower():
                 name = res["brand_name"]
 
@@ -225,3 +222,21 @@ async def package_data_by_name(request, product_name):
     if not brand_packages:
         brand_packages = []
     return response.json({'generic': generic_packages, 'brand': brand_packages})
+
+
+@blueprint.get('/rxnorm/<rxnorm_id>/products')
+async def products_by_rxnorm(request, rxnorm_id):
+    rxnorm_id = rxnorm_id.strip()
+    products = await get_products_by_rxnorm(rxnorm_id)
+    if not products:
+        raise sanic.exceptions.NotFound
+    return response.json(products)
+
+
+@blueprint.get('/rxnorm/<rxnorm_id>/packages')
+async def packages_by_rxnorm(request, rxnorm_id):
+    rxnorm_id = rxnorm_id.strip()
+    packages = await get_packages_by_rxnorm(rxnorm_id)
+    if not packages:
+        raise sanic.exceptions.NotFound
+    return response.json(packages)
