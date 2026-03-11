@@ -5,6 +5,9 @@ info:
   description: |
     Detailed OpenAPI definition for the Sanic Drugs API.
     All endpoints are read-only and are exposed under `/api/v1`.
+    Label payloads may include `set_id` (SPL Set ID), which can be used with
+    DailyMed media APIs for package photo lookup. Media URLs are not returned
+    directly by this API.
 
 servers:
   - url: http://127.0.0.1:8087
@@ -130,6 +133,10 @@ paths:
       tags: [Drug]
       operationId: getLabelByPackageNdc
       summary: Get package + product and optional label by package NDC
+      description: |
+        Returns package and product data and, when available, a `label` object.
+        If `label` is present, `label.set_id` can be used to resolve DailyMed
+        media URLs externally.
       parameters:
         - $ref: '#/components/parameters/PackageNdcParam'
       responses:
@@ -154,6 +161,10 @@ paths:
       tags: [Drug]
       operationId: getLabelByProductNdc
       summary: Get product and optional label by product NDC
+      description: |
+        Returns product data and, when available, a `label` object.
+        If `label` is present, `label.set_id` can be used to resolve DailyMed
+        media URLs externally.
       parameters:
         - $ref: '#/components/parameters/ProductNdcParam'
       responses:
@@ -800,7 +811,10 @@ components:
 
     Label:
       type: object
-      description: Label payload. Model supports many optional text fields.
+      description: |
+        Label payload. Model supports many optional text fields.
+        `set_id` is the SPL Set ID and can be used as key for DailyMed media lookup.
+        Media URLs are not part of this schema.
       properties:
         id:
           type: string
@@ -1056,6 +1070,7 @@ components:
         rxnorm_ids: ['992801']
         label:
           id: '101e2af0-c51e-edc4-e063-6394a90a8b8c'
+          set_id: '101e2af0-c51e-edc4-e063-6394a90a8b8c'
 
     ProductListExample:
       summary: Product list example
