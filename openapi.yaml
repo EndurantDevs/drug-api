@@ -725,6 +725,9 @@ components:
         marketing_category:
           type: string
           nullable: true
+        is_otc:
+          type: boolean
+          nullable: true
         dosage_form:
           type: string
           nullable: true

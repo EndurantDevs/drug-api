@@ -55,3 +55,43 @@ async def test_process_results_sets_empty_rxnorm_ids_without_rxcui(monkeypatch):
 
     rows = captured["product_20260213"]
     assert rows[0]["rxnorm_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_process_results_sets_is_otc_true_from_marketing_category(monkeypatch):
+    captured = {}
+
+    async def fake_push_objects(obj_list, cls):
+        captured[cls.__tablename__] = obj_list
+
+    monkeypatch.setattr(ndc_product, "push_objects", fake_push_objects)
+
+    ctx = {"import_date": "20260213", "context": {"run": 0}}
+    row = _build_ndc_result({"rxcui": [1791588]})
+    row["marketing_category"] = "OTC Monograph Final"
+    task = {"results": [row]}
+
+    await ndc_product.process_results(ctx, task)
+
+    rows = captured["product_20260213"]
+    assert rows[0]["is_otc"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_results_sets_is_otc_false_from_product_type(monkeypatch):
+    captured = {}
+
+    async def fake_push_objects(obj_list, cls):
+        captured[cls.__tablename__] = obj_list
+
+    monkeypatch.setattr(ndc_product, "push_objects", fake_push_objects)
+
+    ctx = {"import_date": "20260213", "context": {"run": 0}}
+    row = _build_ndc_result({"rxcui": [1791588]})
+    row["product_type"] = "HUMAN PRESCRIPTION DRUG"
+    task = {"results": [row]}
+
+    await ndc_product.process_results(ctx, task)
+
+    rows = captured["product_20260213"]
+    assert rows[0]["is_otc"] is False
