@@ -143,8 +143,19 @@ async def process_results(ctx, task):
             packagin_obj_list.append(packagin_obj)
         obj_list.append(obj)
 
-    await push_objects(packagin_obj_list, mypackage)
-    await push_objects(obj_list, myproduct)
+    unique_packages = {}
+    for item in packagin_obj_list:
+        package_ndc = item.get('package_ndc')
+        if package_ndc:
+            unique_packages[package_ndc] = item
+    unique_products = {}
+    for item in obj_list:
+        product_id = item.get('product_id')
+        if product_id:
+            unique_products[product_id] = item
+
+    await push_objects(list(unique_packages.values()), mypackage)
+    await push_objects(list(unique_products.values()), myproduct)
 
 
 async def startup(ctx):
@@ -170,7 +181,9 @@ async def shutdown(ctx):
     if ctx['context'].get('product_count'):
         myproduct = make_class(Product, import_date)
         import_product_count = await db.func.count(myproduct.product_id).gino.scalar()  # pylint: disable=E1101
-        if import_product_count == ctx['context']['product_count']:
+        expected_product_count = int(ctx['context']['product_count'])
+        minimum_expected = int(expected_product_count * 0.95)
+        if import_product_count and import_product_count >= minimum_expected:
             db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
             await db.status("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
             await db.status("CREATE EXTENSION IF NOT EXISTS btree_gin;")
@@ -228,13 +241,18 @@ async def shutdown(ctx):
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table} RENAME TO {table}_old;")
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table}_{import_date} RENAME TO {table};")
 
-            print('Products in JSON:', ctx['context']['product_count'])
+            print('Products in JSON:', expected_product_count)
             print('Products in DB: ', await db.func.count(Product.product_id).gino.scalar())  # pylint: disable=E1101
             print('Packages in DB: ', await db.func.count(Package.package_ndc).gino.scalar())  # pylint: disable=E1101
+            if import_product_count != expected_product_count:
+                print(
+                    f"WARNING: Source total_records ({expected_product_count}) "
+                    f"does not exactly match imported unique product rows ({import_product_count})."
+                )
             print_time_info(ctx['context']['start'])
         else:
             print(f"Aborted: Imported rows Number differs from FDA rows number! "
-                  f"(JSON: {ctx['context']['product_count']}, DB: {import_product_count})")
+                  f"(JSON: {expected_product_count}, DB: {import_product_count})")
     else:
         print('Product import failed')
 

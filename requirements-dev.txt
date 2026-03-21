@@ -1,19 +1,6 @@
-sanic
-arq==0.27.0
-gino
-python-dotenv
-alembic
-ijson
-python-dateutil
-aiofile
-async_unzip
-httpx
-humanize
-pyaml
-pytz
-msgpack
-flake8
-pylint
-isort
-pytest
-pytest-asyncio
+-r requirements.txt
+flake8==7.3.0
+isort==6.1.0
+pylint==3.3.9
+pytest==8.4.2
+pytest-asyncio==1.2.0
