@@ -5,6 +5,7 @@ import re
 import tempfile
 from json import loads
 from pathlib import Path, PurePath
+from typing import Optional
 
 import ijson
 import msgpack
@@ -25,6 +26,22 @@ NDC_QUEUE_NAME = (
     or os.environ.get('ARQ_QUEUE_NDC')
     or 'arq:queue:drug-api-import-ndc'
 )
+
+
+def _derive_is_otc(res: dict) -> Optional[bool]:
+    marketing_category = str(res.get('marketing_category') or '').strip().lower()
+    product_type = str(res.get('product_type') or '').strip().lower()
+    openfda_payload = res.get('openfda') or {}
+    openfda_product_type = " ".join(str(item) for item in (openfda_payload.get('product_type') or [])).strip().lower()
+    signal = " ".join(part for part in (marketing_category, product_type, openfda_product_type) if part)
+
+    if not signal:
+        return None
+    if 'otc' in signal or 'over-the-counter' in signal or 'over the counter' in signal:
+        return True
+    if 'prescription' in signal or signal.startswith('rx ') or ' rx ' in f' {signal} ':
+        return False
+    return None
 
 
 async def download_content(ctx, task):
@@ -79,6 +96,7 @@ async def process_results(ctx, task):
         openfda_payload = res.get('openfda') or {}
         rxnorm_values = openfda_payload.get('rxcui') or []
         obj['rxnorm_ids'] = [str(value) for value in rxnorm_values]
+        obj['is_otc'] = _derive_is_otc(res)
 
         if not ('dosage_form' in obj) and obj['dosage_form']:
             obj['dosage_form'] = ''

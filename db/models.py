@@ -21,6 +21,7 @@ class Product(db.Model, JSONOutputMixin):
     listing_expiration_date = Column(DATE)
     openfda = Column(JSON)
     marketing_category = Column(String)
+    is_otc = Column(Boolean)
     dosage_form = Column(String)
     short_dosage_form = Column(String)
     spl_id = Column(String)
