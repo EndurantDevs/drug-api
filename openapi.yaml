@@ -521,6 +521,88 @@ paths:
         '500':
           $ref: '#/components/responses/InternalErrorJson'
 
+  /api/v1/drug/rxnorm/{rxnorm_id}/conditions:
+    get:
+      tags: [Drug]
+      operationId: getConditionsByRxNorm
+      summary: Get condition evidence by RxNorm ID
+      description: Returns condition evidence derived from local labels and available clinical terminology relationships.
+      parameters:
+        - $ref: '#/components/parameters/RxnormIdParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Condition evidence rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DrugConditionEvidence'
+              examples:
+                conditions:
+                  $ref: '#/components/examples/DrugConditionEvidenceListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/ndc/{product_ndc}/conditions:
+    get:
+      tags: [Drug]
+      operationId: getConditionsByProductNdc
+      summary: Get condition evidence by product NDC
+      description: Returns condition evidence for a product NDC.
+      parameters:
+        - $ref: '#/components/parameters/ProductNdcParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Condition evidence rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DrugConditionEvidence'
+              examples:
+                conditions:
+                  $ref: '#/components/examples/DrugConditionEvidenceListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/drug/label/{set_id}/condition-evidence:
+    get:
+      tags: [Drug]
+      operationId: getConditionEvidenceByLabelSetId
+      summary: Get condition evidence by SPL Set ID
+      parameters:
+        - name: set_id
+          in: path
+          required: true
+          description: SPL Set ID from a label record.
+          schema:
+            type: string
+          example: df29577b-c2f0-bea8-b048-7719972707aa
+      responses:
+        '200':
+          description: Condition evidence rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DrugConditionEvidence'
+              examples:
+                conditions:
+                  $ref: '#/components/examples/DrugConditionEvidenceListExample'
+        '404':
+          $ref: '#/components/responses/NotFoundJson'
+        '500':
+          $ref: '#/components/responses/InternalErrorJson'
+
 components:
   parameters:
     ProductNdcParam:
@@ -614,6 +696,18 @@ components:
       schema:
         type: string
       example: s
+
+    LimitParam:
+      name: limit
+      in: query
+      required: false
+      description: Maximum rows to return.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+      example: 5
 
   responses:
     NotFoundJson:
@@ -842,6 +936,59 @@ components:
           nullable: true
           items:
             type: string
+      additionalProperties: true
+
+    DrugConditionEvidence:
+      type: object
+      properties:
+        evidence_id:
+          type: string
+        set_id:
+          type: string
+          nullable: true
+        label_id:
+          type: string
+          nullable: true
+        product_ndc:
+          type: array
+          nullable: true
+          items:
+            type: string
+        package_ndc:
+          type: array
+          nullable: true
+          items:
+            type: string
+        rxnorm_ids:
+          type: array
+          nullable: true
+          items:
+            type: string
+        condition_system:
+          type: string
+          nullable: true
+        condition_code:
+          type: string
+          nullable: true
+        condition_display:
+          type: string
+          nullable: true
+        evidence_text:
+          type: string
+          nullable: true
+        evidence_source:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          nullable: true
+        source_attribution:
+          type: string
+          nullable: true
+        imported_at:
+          type: string
+          nullable: true
+          description: Date serialized by API with trailing `Z`.
       additionalProperties: true
 
     PackageWithProduct:
@@ -1207,6 +1354,20 @@ components:
           ndc11: '51662140701'
           product_ndc: '51662-1407'
           description: 1 VIAL in 1 CARTON
+
+    DrugConditionEvidenceListExample:
+      summary: Condition evidence rows
+      value:
+        - evidence_id: 2b82f70ae8d05c6b3f47ed258e5dd4859d2b8433
+          set_id: df29577b-c2f0-bea8-b048-7719972707aa
+          product_ndc: ['75907-075']
+          package_ndc: ['75907-075-28', '75907-075-32']
+          rxnorm_ids: ['198042', '748961', '831533']
+          condition_system: MESH
+          condition_code: D008595
+          condition_display: Menorrhagia
+          evidence_source: clinical_rxnorm_relationship
+          confidence: 0.85
 
     NotFoundExample:
       summary: Standard not-found response

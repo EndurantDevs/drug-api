@@ -13,9 +13,10 @@ It explains:
 ## Reading Order
 - [Data sources](./data-sources.md)
 - [Import index](./imports/README.md)
+- [Drug indications DevOps](./devops/drug-indications.md)
 
 ## Import Architecture
-Both imports in this repo follow a table rebuild and swap model:
+Imports in this repo follow a table rebuild and swap model:
 
 - create dated staging tables
 - load data through ARQ workers
