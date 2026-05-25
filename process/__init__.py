@@ -9,6 +9,7 @@ from arq.connections import RedisSettings
 from process.label import download_label_content, init_label_file, label_shutdown, label_startup
 from process.label import main as initiate_label_import
 from process.label import process_label_results
+from process.drug_indications import main as initiate_drug_indications_import
 from process.ndc_product import download_content, init_file
 from process.ndc_product import main as initiate_product_import
 from process.ndc_product import process_results, shutdown, startup
@@ -65,5 +66,13 @@ def label():
     asyncio.run(initiate_label_import())
 
 
+@click.command(help="Run drug-condition indication mapping import")
+@click.option("--test", is_flag=True, help="Process a small label sample for a quick smoke run.")
+@click.option("--import-id", help="Override import id/date suffix for table names.")
+def drug_indications(test, import_id):
+    asyncio.run(initiate_drug_indications_import(test_mode=test, import_id=import_id))
+
+
 process_group.add_command(ndc)
 process_group.add_command(label)
+process_group.add_command(drug_indications, name='drug-indications')

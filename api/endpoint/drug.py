@@ -7,7 +7,7 @@ from sanic import Blueprint, response
 
 from api.utils import (get_brand_packages, get_brand_products, get_generic_packages, get_generic_products,
                        get_packages_by_rxnorm, get_products_by_rxnorm)
-from db.models import Label, Package, Product, db
+from db.models import DrugConditionEvidence, Label, Package, Product, db
 
 blueprint = Blueprint('drug', url_prefix='/drug', version=1)
 
@@ -240,3 +240,44 @@ async def packages_by_rxnorm(request, rxnorm_id):
     if not packages:
         raise sanic.exceptions.NotFound
     return response.json(packages)
+
+
+@blueprint.get('/rxnorm/<rxnorm_id>/conditions')
+async def conditions_by_rxnorm(request, rxnorm_id):
+    rxnorm_id = rxnorm_id.strip()
+    limit = min(int(request.args.get('limit', 100)), 500)
+    data = []
+    q = DrugConditionEvidence.query.where(DrugConditionEvidence.rxnorm_ids.contains([rxnorm_id])).limit(limit).gino
+    async with db.transaction():
+        async for row in q.iterate():
+            data.append(row.to_json_dict())
+    if not data:
+        raise sanic.exceptions.NotFound
+    return response.json(data)
+
+
+@blueprint.get('/ndc/<product_ndc>/conditions')
+async def conditions_by_product_ndc(request, product_ndc):
+    product_ndc = product_ndc.strip()
+    limit = min(int(request.args.get('limit', 100)), 500)
+    data = []
+    q = DrugConditionEvidence.query.where(DrugConditionEvidence.product_ndc.contains([product_ndc])).limit(limit).gino
+    async with db.transaction():
+        async for row in q.iterate():
+            data.append(row.to_json_dict())
+    if not data:
+        raise sanic.exceptions.NotFound
+    return response.json(data)
+
+
+@blueprint.get('/label/<set_id>/condition-evidence')
+async def condition_evidence_by_label(request, set_id):
+    set_id = set_id.strip()
+    data = []
+    q = DrugConditionEvidence.query.where(DrugConditionEvidence.set_id == set_id).gino
+    async with db.transaction():
+        async for row in q.iterate():
+            data.append(row.to_json_dict())
+    if not data:
+        raise sanic.exceptions.NotFound
+    return response.json(data)

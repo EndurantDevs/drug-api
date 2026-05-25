@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import DATE, JSON, TEXT, BigInteger, Boolean, Column, String
+from sqlalchemy import DATE, JSON, TEXT, BigInteger, Boolean, Column, DateTime, Float, String
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from db.connection import db
@@ -188,3 +188,45 @@ class Label(db.Model, JSONOutputMixin):
     user_safety_warnings_table = Column(String)
     warnings = Column(String)
     warnings_table = Column(String)
+
+
+class DrugConditionEvidence(db.Model, JSONOutputMixin):
+    __tablename__ = 'drug_condition_evidence'
+    __table_args__ = (
+        {'schema': os.getenv('DB_SCHEMA') or 'rx_data', 'extend_existing': True},
+    )
+    evidence_id = Column(String, primary_key=True)
+    set_id = Column(String)
+    label_id = Column(String)
+    product_ndc = Column(ARRAY(String))
+    package_ndc = Column(ARRAY(String))
+    rxnorm_ids = Column(ARRAY(String))
+    condition_system = Column(String)
+    condition_code = Column(String)
+    condition_display = Column(String)
+    evidence_text = Column(TEXT)
+    evidence_source = Column(String)
+    confidence = Column(Float)
+    source_attribution = Column(TEXT)
+    imported_at = Column(DateTime)
+
+
+class DrugTreatmentMapping(db.Model, JSONOutputMixin):
+    __tablename__ = 'drug_treatment_mapping'
+    __table_args__ = (
+        {'schema': os.getenv('DB_SCHEMA') or 'rx_data', 'extend_existing': True},
+    )
+    mapping_id = Column(String, primary_key=True)
+    set_id = Column(String)
+    product_ndc = Column(ARRAY(String))
+    package_ndc = Column(ARRAY(String))
+    rxnorm_ids = Column(ARRAY(String))
+    treatment_system = Column(String)
+    treatment_code = Column(String)
+    treatment_display = Column(String)
+    condition_system = Column(String)
+    condition_code = Column(String)
+    condition_display = Column(String)
+    source = Column(String)
+    source_attribution = Column(TEXT)
+    imported_at = Column(DateTime)

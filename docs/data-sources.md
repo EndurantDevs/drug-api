@@ -1,44 +1,25 @@
 # Data Sources
 
-This page lists the public source websites used by `drug-api`.
-The project primarily imports from OpenFDA and exposes data in a normalized local schema.
+This page is the canonical source registry for `drug-api`.
 
-## Active Import Sources
+## Active Import Source Registry
 
-### OpenFDA
-Website: <https://open.fda.gov/>
+| Source website | Dataset families used | Importers using it | Main outputs |
+| --- | --- | --- | --- |
+| <https://open.fda.gov/> | OpenFDA `drug/ndc` and `drug/label` public payloads | `ndc`, `label`, `drug-indications` | normalized `rx_data.product`, `rx_data.package`, `rx_data.label`, derived condition evidence |
+| Shared `healthcare-mrf-api` clinical terminology tables | RxNorm-to-condition/treatment relationships from official terminology imports | `drug-indications` | supplemental `clinical_rxnorm_relationship` evidence in `rx_data.drug_condition_evidence` and `rx_data.drug_treatment_mapping` |
+| <https://api.fda.gov/download.json> | OpenFDA partition discovery feed | `ndc`, `label` | current partition URL resolution before import |
 
-Used for:
+## Reference/Terminology Sources
 
-- NDC product and package imports
-- drug label imports
-- OpenFDA payload fields such as `openfda.rxcui`, `product_ndc`, and `package_ndc`
-
-### FDA Download Catalog
-Website: <https://api.fda.gov/download.json>
-
-Used for:
-
-- discovering the current OpenFDA partition files for `drug/ndc` and `drug/label`
-
-## Reference and Enrichment Sources
-
-### RxNorm
-Website: <https://www.nlm.nih.gov/research/umls/rxnorm/index.html>
-
-Used for:
-
-- RxNorm-oriented API lookups and terminology alignment
-- product/package lookup by RxNorm ID after NDC import populates `product.rxnorm_ids`
-
-### DailyMed
-Website: <https://dailymed.nlm.nih.gov/dailymed/>
-
-Used for:
-
-- SPL / set-id oriented label context
-- planned or optional media/photo enrichment workflows keyed by `set_id`
+| Source website | How it is used |
+| --- | --- |
+| <https://www.nlm.nih.gov/research/umls/rxnorm/index.html> | Terminology alignment for RxNorm-linked API lookups. RxNorm IDs are populated from OpenFDA `openfda.rxcui` during NDC import. |
+| <https://dailymed.nlm.nih.gov/dailymed/> | SPL/set-id reference context and indication text behind `drug-indications` condition evidence. |
 
 ## Notes
-- `drug-api` does not depend on request-time external calls for normal API responses.
-- External websites are treated as ingest-time sources or reference systems, not live runtime dependencies for the main API.
+
+- `drug-api` serves local PostgreSQL tables at request time.
+- External websites are import-time or reference dependencies, not required per-request upstream calls.
+- Import freshness depends on each importer’s latest successful publish/swap cycle.
+- Products using NLM-derived data must preserve the attribution statement documented in [imports/drug-indications.md](./imports/drug-indications.md).

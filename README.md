@@ -10,6 +10,7 @@ This service maintains the drug-side canonical tables used for:
 - NDC product and package search
 - FDA label retrieval
 - RxNorm-linked product and package lookup
+- DailyMed/OpenFDA label-derived condition evidence
 - downstream crosswalk support for other HealthPorta services
 
 ## Documentation
@@ -21,6 +22,22 @@ Key pages:
 - [Import index](./docs/imports/README.md)
 - [NDC import](./docs/imports/ndc.md)
 - [Label import](./docs/imports/label.md)
+- [Drug indications import](./docs/imports/drug-indications.md)
+- [Drug indications DevOps](./docs/devops/drug-indications.md)
+
+## Source Families
+
+This repository ingests from public FDA/OpenFDA source systems:
+
+- [OpenFDA](https://open.fda.gov/) (`drug/ndc` and `drug/label` payloads)
+- [FDA download catalog](https://api.fda.gov/download.json) (partition discovery)
+
+Reference terminology/context used by the data model:
+
+- [RxNorm](https://www.nlm.nih.gov/research/umls/rxnorm/index.html)
+- [DailyMed](https://dailymed.nlm.nih.gov/dailymed/)
+
+See the canonical source registry in [docs/data-sources.md](./docs/data-sources.md).
 
 ## Commercial Usage
 For production documentation and managed commercial access, see [HealthPorta Docs](https://app.healthporta.com/docs).
@@ -65,10 +82,19 @@ python main.py start label
 python main.py worker process.Labeling --burst
 ```
 
+Drug indication mapping import:
+
+```bash
+python main.py start drug-indications --test
+python main.py start drug-indications
+```
+
 Each import rebuilds staging tables and then swaps them into the live `rx_data` schema.
 
 ## Operational Notes
 - NDC import publishes `product` and `package` together.
 - Label import publishes `label` separately.
+- Drug indications import publishes `drug_condition_evidence` and `drug_treatment_mapping` from local label data.
 - The project uses dedicated ARQ queues for NDC and label imports by default.
 - RxNorm lookup support depends on a successful NDC import because `product.rxnorm_ids` is populated from OpenFDA payloads during that import.
+- DailyMed/NLM-derived outputs must preserve the required NLM attribution statement from the import docs.
