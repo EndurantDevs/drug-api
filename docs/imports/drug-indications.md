@@ -1,13 +1,13 @@
 # Drug Indications Import
 
-`drug-indications` derives drug-to-condition evidence from the local `rx_data.label` table.
+`drug-indications` derives drug-to-condition evidence from the local `rx_data.label` table and official clinical terminology tables.
 It does not call Ribbon or any other third-party API at request time.
 
 ## Command
 
 Run after `ndc` and `label` have published current tables. `label` supplies indication text; `ndc` supplies RxNorm IDs for `/rxnorm/{id}/conditions`.
 
-For fuller coverage, run the `healthcare-mrf-api` `clinical-reference` import first on the shared Postgres instance. When `mrf.code_relationship` is present, this importer also derives `clinical_rxnorm_relationship` evidence from RxNorm-to-condition relationships.
+Run the `healthcare-mrf-api` `clinical-reference` import first on the shared Postgres instance. The importer requires `mrf.code_relationship`, `mrf.code_catalog`, and `mrf.code_synonym` unless test/allow-empty mode is explicitly enabled.
 
 ```bash
 python main.py start drug-indications --test
@@ -25,7 +25,6 @@ python main.py start drug-indications --import-id 20260525
 The importer stages, indexes, validates, and replaces:
 
 - `rx_data.drug_condition_evidence`
-- `rx_data.drug_treatment_mapping`
 
 The live API reads these tables directly.
 

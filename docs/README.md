@@ -16,15 +16,12 @@ It explains:
 - [Drug indications DevOps](./devops/drug-indications.md)
 
 ## Import Architecture
-Imports in this repo follow a table rebuild and swap model:
+Imports in this repo use importer-specific publish models:
 
-- create dated staging tables
-- load data through ARQ workers
-- build indexes on the staged tables
-- rename/swap staged tables into the live schema
-- keep `_old` tables as the immediately previous live snapshot
+- NDC and label imports create dated staging tables, load through ARQ workers, build indexes, then swap staged tables into the live schema with `_old` rollback backups.
+- Drug indications creates dated staging tables, builds indexes, validates row counts, then directly replaces the live indication tables without `_old` rollback backups.
 
-This makes imports deterministic and keeps live tables stable during long loads.
+Both patterns keep live tables stable during long loads. Check the per-import runbook before cleanup or rollback work.
 
 ## Commercial Usage
 If you need managed production access instead of running this repository yourself, use [HealthPorta Docs](https://app.healthporta.com/docs).

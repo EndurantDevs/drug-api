@@ -3,11 +3,12 @@ import datetime
 import hashlib
 import os
 import re
+from collections import defaultdict
 
 import asyncpg
 
 from db.connection import init_db
-from db.models import DrugConditionEvidence, DrugTreatmentMapping, Label, Product, db
+from db.models import DrugConditionEvidence, Label, Product, db
 from process.ext.utils import make_class, push_objects, print_time_info
 
 NLM_ATTRIBUTION = (
@@ -15,16 +16,6 @@ NLM_ATTRIBUTION = (
     "National Institutes of Health, Department of Health and Human Services; NLM is not responsible "
     "for the product and does not endorse or recommend this or any other product."
 )
-
-CONDITION_LEXICON = [
-    ("ICD10CM", "I10", "Essential hypertension", ("hypertension", "high blood pressure")),
-    ("ICD10CM", "E11.9", "Type 2 diabetes mellitus without complications", ("type 2 diabetes", "diabetes mellitus")),
-    ("ICD10CM", "F32.9", "Major depressive disorder, single episode, unspecified", ("major depressive disorder", "depression")),
-    ("ICD10CM", "F41.9", "Anxiety disorder, unspecified", ("anxiety disorder", "anxiety")),
-    ("ICD10CM", "J45.909", "Unspecified asthma, uncomplicated", ("asthma",)),
-    ("ICD10CM", "G43.909", "Migraine, unspecified, not intractable, without status migrainosus", ("migraine",)),
-    ("ICD10CM", "K21.9", "Gastro-esophageal reflux disease without esophagitis", ("gastroesophageal reflux", "gerd")),
-]
 
 
 def _schema():
@@ -38,6 +29,25 @@ def _import_date(raw=None):
         if cleaned:
             return cleaned[:32]
     return datetime.datetime.utcnow().strftime('%Y%m%d')
+
+
+def _clinical_schema():
+    return os.getenv('HLTHPRT_CLINICAL_DB_SCHEMA') or 'mrf'
+
+
+def _clinical_connection_kwargs():
+    return {
+        'host': os.getenv('HLTHPRT_CLINICAL_DB_HOST') or os.getenv('HLTHPRT_DB_HOST') or '127.0.0.1',
+        'port': int(os.getenv('HLTHPRT_CLINICAL_DB_PORT') or '5440'),
+        'user': os.getenv('HLTHPRT_CLINICAL_DB_USER') or os.getenv('HLTHPRT_DB_USER') or 'postgres',
+        'password': os.getenv('HLTHPRT_CLINICAL_DB_PASSWORD') or os.getenv('HLTHPRT_DB_PASSWORD') or '',
+        'database': (
+            os.getenv('HLTHPRT_CLINICAL_DB_DATABASE')
+            or os.getenv('HLTHPRT_DB_DATABASE')
+            or os.getenv('DB_NAME')
+            or 'healthporta'
+        ),
+    }
 
 
 def _text_excerpt(text, needle):
@@ -70,171 +80,147 @@ def _rxnorm_ids_for_label(product_ndc, rxnorm_by_product):
     return sorted(rxnorm_ids)
 
 
-def _matches(label, rxnorm_by_product):
-    text = getattr(label, 'indications_and_usage', None) or ''
-    text_lower = text.lower()
-    product_ndc, package_ndc = _label_ndcs(label)
-    rxnorm_ids = _rxnorm_ids_for_label(product_ndc, rxnorm_by_product)
-    now = datetime.datetime.utcnow()
-    for system, code, display, terms in CONDITION_LEXICON:
-        matched_term = next((term for term in terms if term in text_lower), None)
-        if not matched_term:
-            continue
-        evidence_id = _hash_id(getattr(label, 'set_id', None), getattr(label, 'id', None), system, code, matched_term)
-        yield {
-            'evidence_id': evidence_id,
-            'set_id': getattr(label, 'set_id', None),
-            'label_id': getattr(label, 'id', None),
-            'product_ndc': product_ndc,
-            'package_ndc': package_ndc,
-            'rxnorm_ids': rxnorm_ids,
-            'condition_system': system,
-            'condition_code': code,
-            'condition_display': display,
-            'evidence_text': _text_excerpt(text, matched_term),
-            'evidence_source': 'dailymed_label_indications_and_usage',
-            'confidence': 0.75,
-            'source_attribution': NLM_ATTRIBUTION,
-            'imported_at': now,
-        }
-        yield {
-            'mapping_id': evidence_id,
-            'set_id': getattr(label, 'set_id', None),
-            'product_ndc': product_ndc,
-            'package_ndc': package_ndc,
-            'rxnorm_ids': rxnorm_ids,
-            'treatment_system': 'NDC',
-            'treatment_code': product_ndc[0] if product_ndc else None,
-            'treatment_display': None,
-            'condition_system': system,
-            'condition_code': code,
-            'condition_display': display,
-            'source': 'dailymed_label_indications_and_usage',
-            'source_attribution': NLM_ATTRIBUTION,
-            'imported_at': now,
-        }
+def _normalize_term(term):
+    return re.sub(r'\s+', ' ', str(term or '').strip().lower())
 
 
-async def _load_rxnorm_condition_map():
-    clinical_schema = os.getenv('HLTHPRT_CLINICAL_DB_SCHEMA') or 'mrf'
-    clinical_database = os.getenv('HLTHPRT_CLINICAL_DB_DATABASE') or os.getenv('HLTHPRT_DB_DATABASE') or 'healthporta'
-    clinical_host = os.getenv('HLTHPRT_CLINICAL_DB_HOST') or os.getenv('HLTHPRT_DB_HOST') or '127.0.0.1'
-    clinical_port = int(os.getenv('HLTHPRT_CLINICAL_DB_PORT') or '5440')
-    clinical_user = os.getenv('HLTHPRT_CLINICAL_DB_USER') or os.getenv('HLTHPRT_DB_USER') or 'postgres'
-    clinical_password = os.getenv('HLTHPRT_CLINICAL_DB_PASSWORD') or os.getenv('HLTHPRT_DB_PASSWORD') or ''
+def _term_matches(text_lower, term):
+    normalized = _normalize_term(term)
+    if len(normalized) < 4:
+        return False
+    return re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", text_lower) is not None
+
+
+async def _fetch_clinical_rows(test_mode=False):
+    schema = _clinical_schema()
     try:
-        connection = await asyncpg.connect(
-            host=clinical_host,
-            port=clinical_port,
-            user=clinical_user,
-            password=clinical_password,
-            database=clinical_database,
-        )
+        connection = await asyncpg.connect(**_clinical_connection_kwargs())
         try:
-            rows = await connection.fetch(
+            relationship_rows = await connection.fetch(
                 f"""
                 SELECT r.from_code AS rxcui,
                        r.to_system AS condition_system,
                        r.to_code AS condition_code,
-                       c.display_name AS condition_display,
                        r.relationship AS relationship,
-                       r.source_attribution AS source_attribution
-                  FROM {clinical_schema}.code_relationship r
-                  LEFT JOIN {clinical_schema}.code_catalog c
+                       COALESCE(r.source_attribution, c.source_attribution) AS source_attribution
+                  FROM {schema}.code_relationship r
+                  JOIN {schema}.code_catalog c
                     ON c.code_system = r.to_system
                    AND c.code = r.to_code
+                   AND c.code_type = 'condition'
                  WHERE r.from_system = 'RXNORM'
                    AND r.relationship IN ('may_treat', 'may_prevent')
-                   AND c.code_type = 'condition'
+                """
+            )
+            term_rows = await connection.fetch(
+                f"""
+                SELECT code_system AS condition_system,
+                       code AS condition_code,
+                       display_name AS term,
+                       'preferred' AS term_type
+                  FROM {schema}.code_catalog
+                 WHERE code_type = 'condition'
+                   AND COALESCE(display_name, '') <> ''
+                UNION ALL
+                SELECT code_system AS condition_system,
+                       code AS condition_code,
+                       synonym AS term,
+                       term_type
+                  FROM {schema}.code_synonym
+                 WHERE COALESCE(synonym, '') <> ''
                 """
             )
         finally:
             await connection.close()
-    except Exception:
-        try:
-            rows = await db.all(
-            f"""
-            SELECT r.from_code AS rxcui,
-                   r.to_system AS condition_system,
-                   r.to_code AS condition_code,
-                   c.display_name AS condition_display,
-                   r.relationship AS relationship,
-                   r.source_attribution AS source_attribution
-              FROM {clinical_schema}.code_relationship r
-              LEFT JOIN {clinical_schema}.code_catalog c
-                ON c.code_system = r.to_system
-               AND c.code = r.to_code
-             WHERE r.from_system = 'RXNORM'
-               AND r.relationship IN ('may_treat', 'may_prevent')
-               AND c.code_type = 'condition'
-            """
+    except Exception as exc:
+        allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
+        if test_mode or allow_empty:
+            print(f"Clinical terminology lookup skipped: {exc}")
+            return [], []
+        raise RuntimeError(f"Clinical terminology lookup failed: {exc}") from exc
+    return relationship_rows, term_rows
+
+
+async def _load_official_condition_context(test_mode=False):
+    relationship_rows, term_rows = await _fetch_clinical_rows(test_mode=test_mode)
+    terms_by_condition = defaultdict(list)
+    for row in term_rows:
+        term = _normalize_term(row['term'])
+        if term:
+            terms_by_condition[(row['condition_system'], row['condition_code'])].append(
+                {'term': term, 'term_type': row['term_type']}
             )
-        except Exception as exc:
-            print(f"Clinical terminology relationship lookup skipped: {exc}")
-            return {}
-    result = {}
-    for row in rows:
-        if hasattr(row, "keys"):
-            rxcui = row["rxcui"]
-            system = row["condition_system"]
-            code = row["condition_code"]
-            display = row["condition_display"]
-            relationship = row["relationship"]
-            attribution = row["source_attribution"]
-        else:
-            rxcui, system, code, display, relationship, attribution = row
-        result.setdefault(str(rxcui), []).append({
-            'condition_system': system,
-            'condition_code': code,
-            'condition_display': display or code,
-            'relationship': relationship,
-            'source_attribution': attribution or NLM_ATTRIBUTION,
-        })
-    return result
+
+    relationships_by_rxnorm = defaultdict(list)
+    for row in relationship_rows:
+        key = (row['condition_system'], row['condition_code'])
+        relationships_by_rxnorm[str(row['rxcui'])].append(
+            {
+                'condition_system': row['condition_system'],
+                'condition_code': row['condition_code'],
+                'relationship': row['relationship'],
+                'source_attribution': row['source_attribution'] or NLM_ATTRIBUTION,
+                'terms': terms_by_condition.get(key, []),
+            }
+        )
+    return relationships_by_rxnorm
 
 
-def _relationship_matches(label, rxnorm_by_product, rxnorm_condition_map):
+def _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
+    text = getattr(label, 'indications_and_usage', None) or ''
+    text_lower = re.sub(r'\s+', ' ', text.lower())
     product_ndc, package_ndc = _label_ndcs(label)
     rxnorm_ids = _rxnorm_ids_for_label(product_ndc, rxnorm_by_product)
     now = datetime.datetime.utcnow()
+    emitted = set()
     for rxcui in rxnorm_ids:
-        for item in rxnorm_condition_map.get(str(rxcui), []):
-            evidence_id = _hash_id(getattr(label, 'set_id', None), getattr(label, 'id', None), rxcui, item['condition_system'], item['condition_code'])
-            yield {
-                'evidence_id': evidence_id,
-                'set_id': getattr(label, 'set_id', None),
-                'label_id': getattr(label, 'id', None),
-                'product_ndc': product_ndc,
-                'package_ndc': package_ndc,
-                'rxnorm_ids': rxnorm_ids,
-                'condition_system': item['condition_system'],
-                'condition_code': item['condition_code'],
-                'condition_display': item['condition_display'],
-                'evidence_text': f"RxNorm {rxcui} {item['relationship']} {item['condition_display']} via clinical terminology relationship.",
-                'evidence_source': 'clinical_rxnorm_relationship',
-                'confidence': 0.85,
-                'source_attribution': item['source_attribution'],
-                'imported_at': now,
-            }
-            yield {
-                'mapping_id': evidence_id,
-                'set_id': getattr(label, 'set_id', None),
-                'product_ndc': product_ndc,
-                'package_ndc': package_ndc,
-                'rxnorm_ids': rxnorm_ids,
-                'treatment_system': 'RXNORM',
-                'treatment_code': str(rxcui),
-                'treatment_display': None,
-                'condition_system': item['condition_system'],
-                'condition_code': item['condition_code'],
-                'condition_display': item['condition_display'],
-                'source': 'clinical_rxnorm_relationship',
-                'source_attribution': item['source_attribution'],
-                'imported_at': now,
-            }
+        for item in relationships_by_rxnorm.get(str(rxcui), []):
+            base_key = (rxcui, item['condition_system'], item['condition_code'])
+            if base_key not in emitted:
+                emitted.add(base_key)
+                evidence_id = _hash_id(getattr(label, 'set_id', None), getattr(label, 'id', None), *base_key)
+                yield {
+                    'evidence_id': evidence_id,
+                    'set_id': getattr(label, 'set_id', None),
+                    'label_id': getattr(label, 'id', None),
+                    'product_ndc': product_ndc,
+                    'package_ndc': package_ndc,
+                    'rxnorm_ids': rxnorm_ids,
+                    'condition_system': item['condition_system'],
+                    'condition_code': item['condition_code'],
+                    'evidence_text': f"RxNorm {rxcui} {item['relationship']} {item['condition_system']}:{item['condition_code']} via clinical terminology relationship.",
+                    'evidence_source': 'clinical_rxnorm_relationship',
+                    'confidence': 0.85,
+                    'source_attribution': item['source_attribution'],
+                    'imported_at': now,
+                }
+            for term in item['terms']:
+                matched_term = term['term']
+                if not _term_matches(text_lower, matched_term):
+                    continue
+                term_key = (*base_key, matched_term)
+                if term_key in emitted:
+                    continue
+                emitted.add(term_key)
+                evidence_id = _hash_id(getattr(label, 'set_id', None), getattr(label, 'id', None), *term_key)
+                yield {
+                    'evidence_id': evidence_id,
+                    'set_id': getattr(label, 'set_id', None),
+                    'label_id': getattr(label, 'id', None),
+                    'product_ndc': product_ndc,
+                    'package_ndc': package_ndc,
+                    'rxnorm_ids': rxnorm_ids,
+                    'condition_system': item['condition_system'],
+                    'condition_code': item['condition_code'],
+                    'evidence_text': _text_excerpt(text, matched_term),
+                    'evidence_source': 'clinical_synonym_label_match',
+                    'confidence': 0.9 if term['term_type'] == 'preferred' else 0.8,
+                    'source_attribution': item['source_attribution'],
+                    'imported_at': now,
+                }
 
 
-async def _create_indexes(schema, evidence_cls, mapping_cls, import_date):
+async def _create_indexes(schema, evidence_cls, import_date):
     await db.status(
         f"CREATE UNIQUE INDEX idx_drug_condition_evidence_id_{import_date} "
         f"ON {schema}.{evidence_cls.__tablename__} (evidence_id);"
@@ -252,32 +238,23 @@ async def _create_indexes(schema, evidence_cls, mapping_cls, import_date):
         f"ON {schema}.{evidence_cls.__tablename__} USING GIN(product_ndc);"
     )
     await db.status(
-        f"CREATE UNIQUE INDEX idx_drug_treatment_mapping_id_{import_date} "
-        f"ON {schema}.{mapping_cls.__tablename__} (mapping_id);"
-    )
-    await db.status(
-        f"CREATE INDEX idx_drug_treatment_mapping_condition_{import_date} "
-        f"ON {schema}.{mapping_cls.__tablename__} (condition_system, condition_code);"
-    )
-    await db.status(
-        f"CREATE INDEX idx_drug_treatment_mapping_product_ndc_{import_date} "
-        f"ON {schema}.{mapping_cls.__tablename__} USING GIN(product_ndc);"
+        f"CREATE INDEX idx_drug_condition_evidence_rxnorm_{import_date} "
+        f"ON {schema}.{evidence_cls.__tablename__} USING GIN(rxnorm_ids);"
     )
 
 
 async def _publish(schema, import_date):
-    for table in ['drug_condition_evidence', 'drug_treatment_mapping']:
-        await db.status(f"DROP TABLE IF EXISTS {schema}.{table};")
-        await db.status(f"ALTER TABLE IF EXISTS {schema}.{table}_{import_date} RENAME TO {table};")
+    await db.status(f"DROP TABLE IF EXISTS {schema}.drug_condition_evidence;")
+    await db.status(
+        f"ALTER TABLE IF EXISTS {schema}.drug_condition_evidence_{import_date} RENAME TO drug_condition_evidence;"
+    )
 
     for prefix in [
         'idx_drug_condition_evidence_id',
         'idx_drug_condition_evidence_set_id',
         'idx_drug_condition_evidence_condition',
         'idx_drug_condition_evidence_product_ndc',
-        'idx_drug_treatment_mapping_id',
-        'idx_drug_treatment_mapping_condition',
-        'idx_drug_treatment_mapping_product_ndc',
+        'idx_drug_condition_evidence_rxnorm',
     ]:
         await db.status(f"ALTER INDEX IF EXISTS {schema}.{prefix}_{import_date} RENAME TO {prefix};")
 
@@ -291,50 +268,33 @@ async def import_drug_indications(test_mode=False, import_id=None):
 
     await db.status(f"CREATE SCHEMA IF NOT EXISTS {schema};")
     evidence_cls = make_class(DrugConditionEvidence, import_date)
-    mapping_cls = make_class(DrugTreatmentMapping, import_date)
     await db.status(f"DROP TABLE IF EXISTS {schema}.{evidence_cls.__tablename__};")
-    await db.status(f"DROP TABLE IF EXISTS {schema}.{mapping_cls.__tablename__};")
     await evidence_cls.__table__.gino.create()
-    await mapping_cls.__table__.gino.create()
 
     rxnorm_by_product = {}
     async with db.transaction():
         async for product in Product.query.gino.iterate():
             if getattr(product, 'product_ndc', None):
                 rxnorm_by_product[product.product_ndc] = list(getattr(product, 'rxnorm_ids', None) or [])
-    rxnorm_condition_map = await _load_rxnorm_condition_map()
+    relationships_by_rxnorm = await _load_official_condition_context(test_mode=test_mode)
 
     evidence_batch = []
-    mapping_batch = []
     scanned = 0
     matched = 0
     async with db.transaction():
         async for label in Label.query.gino.iterate():
             scanned += 1
-            for row in _matches(label, rxnorm_by_product):
-                if 'evidence_id' in row:
-                    evidence_batch.append(row)
-                    matched += 1
-                else:
-                    mapping_batch.append(row)
-            for row in _relationship_matches(label, rxnorm_by_product, rxnorm_condition_map):
-                if 'evidence_id' in row:
-                    evidence_batch.append(row)
-                    matched += 1
-                else:
-                    mapping_batch.append(row)
+            for row in _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
+                evidence_batch.append(row)
+                matched += 1
             if len(evidence_batch) >= batch_size:
                 await push_objects(evidence_batch, evidence_cls)
                 evidence_batch = []
-            if len(mapping_batch) >= batch_size:
-                await push_objects(mapping_batch, mapping_cls)
-                mapping_batch = []
             if test_mode and scanned >= test_limit:
                 break
 
     await push_objects(evidence_batch, evidence_cls)
-    await push_objects(mapping_batch, mapping_cls)
-    await _create_indexes(schema, evidence_cls, mapping_cls, import_date)
+    await _create_indexes(schema, evidence_cls, import_date)
 
     min_rows = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_MIN_ROWS', '1' if test_mode else '100'))
     allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}

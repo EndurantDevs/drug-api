@@ -970,9 +970,6 @@ components:
         condition_code:
           type: string
           nullable: true
-        condition_display:
-          type: string
-          nullable: true
         evidence_text:
           type: string
           nullable: true
@@ -1365,7 +1362,6 @@ components:
           rxnorm_ids: ['198042', '748961', '831533']
           condition_system: MESH
           condition_code: D008595
-          condition_display: Menorrhagia
           evidence_source: clinical_rxnorm_relationship
           confidence: 0.85
 

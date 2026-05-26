@@ -94,7 +94,7 @@ Each import rebuilds staging tables and then swaps them into the live `rx_data` 
 ## Operational Notes
 - NDC import publishes `product` and `package` together.
 - Label import publishes `label` separately.
-- Drug indications import publishes `drug_condition_evidence` and `drug_treatment_mapping` from local label data.
+- Drug indications import publishes `drug_condition_evidence` from local label data plus official clinical terminology relationships.
 - The project uses dedicated ARQ queues for NDC and label imports by default.
 - RxNorm lookup support depends on a successful NDC import because `product.rxnorm_ids` is populated from OpenFDA payloads during that import.
 - DailyMed/NLM-derived outputs must preserve the required NLM attribution statement from the import docs.

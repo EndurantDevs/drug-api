@@ -7,7 +7,7 @@ This page is the canonical source registry for `drug-api`.
 | Source website | Dataset families used | Importers using it | Main outputs |
 | --- | --- | --- | --- |
 | <https://open.fda.gov/> | OpenFDA `drug/ndc` and `drug/label` public payloads | `ndc`, `label`, `drug-indications` | normalized `rx_data.product`, `rx_data.package`, `rx_data.label`, derived condition evidence |
-| Shared `healthcare-mrf-api` clinical terminology tables | RxNorm-to-condition/treatment relationships from official terminology imports | `drug-indications` | supplemental `clinical_rxnorm_relationship` evidence in `rx_data.drug_condition_evidence` and `rx_data.drug_treatment_mapping` |
+| Shared `healthcare-mrf-api` clinical terminology tables | RxNorm-to-condition relationships and condition synonyms from official terminology imports | `drug-indications` | supplemental relationship and label-text evidence in `rx_data.drug_condition_evidence` |
 | <https://api.fda.gov/download.json> | OpenFDA partition discovery feed | `ndc`, `label` | current partition URL resolution before import |
 
 ## Reference/Terminology Sources
@@ -21,5 +21,5 @@ This page is the canonical source registry for `drug-api`.
 
 - `drug-api` serves local PostgreSQL tables at request time.
 - External websites are import-time or reference dependencies, not required per-request upstream calls.
-- Import freshness depends on each importer’s latest successful publish/swap cycle.
+- Import freshness depends on each importer’s latest successful publish cycle.
 - Products using NLM-derived data must preserve the attribution statement documented in [imports/drug-indications.md](./imports/drug-indications.md).
