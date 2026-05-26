@@ -7,7 +7,7 @@ It does not call Ribbon or any other third-party API at request time.
 
 Run after `ndc` and `label` have published current tables. `label` supplies indication text; `ndc` supplies RxNorm IDs for `/rxnorm/{id}/conditions`.
 
-For fuller coverage, run the `healthcare-mrf-api` `clinical-reference` import first on the shared Postgres instance. When `mrf.clinical_code_relationship` is present, this importer also derives `clinical_rxnorm_relationship` evidence from RxNorm-to-condition relationships.
+For fuller coverage, run the `healthcare-mrf-api` `clinical-reference` import first on the shared Postgres instance. When `mrf.code_relationship` is present, this importer also derives `clinical_rxnorm_relationship` evidence from RxNorm-to-condition relationships.
 
 ```bash
 python main.py start drug-indications --test
@@ -22,7 +22,7 @@ python main.py start drug-indications --import-id 20260525
 
 ## Tables
 
-The importer stages, indexes, validates, and swaps:
+The importer stages, indexes, validates, and replaces:
 
 - `rx_data.drug_condition_evidence`
 - `rx_data.drug_treatment_mapping`
