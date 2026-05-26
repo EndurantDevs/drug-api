@@ -31,7 +31,7 @@ python main.py start drug-indications --test --import-id smoke
 python main.py start drug-indications --import-id 20260525
 ```
 
-The importer creates stage tables, extracts indication evidence from local labels and available `mrf.code_relationship` rows, builds indexes at the end, validates row counts, and replaces live tables only after validation. It does not keep `_old` rollback tables.
+The importer creates a stage evidence table, extracts indication evidence from local labels plus official `mrf.code_relationship`/`mrf.code_synonym` rows, builds indexes at the end, validates row counts, and replaces the live evidence table only after validation. It does not keep `_old` rollback tables.
 
 ## Attribution
 
