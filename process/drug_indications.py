@@ -139,8 +139,8 @@ async def _load_rxnorm_condition_map():
                        c.display_name AS condition_display,
                        r.relationship AS relationship,
                        r.source_attribution AS source_attribution
-                  FROM {clinical_schema}.clinical_code_relationship r
-                  LEFT JOIN {clinical_schema}.clinical_code_catalog c
+                  FROM {clinical_schema}.code_relationship r
+                  LEFT JOIN {clinical_schema}.code_catalog c
                     ON c.code_system = r.to_system
                    AND c.code = r.to_code
                  WHERE r.from_system = 'RXNORM'
@@ -160,8 +160,8 @@ async def _load_rxnorm_condition_map():
                    c.display_name AS condition_display,
                    r.relationship AS relationship,
                    r.source_attribution AS source_attribution
-              FROM {clinical_schema}.clinical_code_relationship r
-              LEFT JOIN {clinical_schema}.clinical_code_catalog c
+              FROM {clinical_schema}.code_relationship r
+              LEFT JOIN {clinical_schema}.code_catalog c
                 ON c.code_system = r.to_system
                AND c.code = r.to_code
              WHERE r.from_system = 'RXNORM'
@@ -265,10 +265,9 @@ async def _create_indexes(schema, evidence_cls, mapping_cls, import_date):
     )
 
 
-async def _swap(schema, import_date):
+async def _publish(schema, import_date):
     for table in ['drug_condition_evidence', 'drug_treatment_mapping']:
-        await db.status(f"DROP TABLE IF EXISTS {schema}.{table}_old;")
-        await db.status(f"ALTER TABLE IF EXISTS {schema}.{table} RENAME TO {table}_old;")
+        await db.status(f"DROP TABLE IF EXISTS {schema}.{table};")
         await db.status(f"ALTER TABLE IF EXISTS {schema}.{table}_{import_date} RENAME TO {table};")
 
     for prefix in [
@@ -280,7 +279,6 @@ async def _swap(schema, import_date):
         'idx_drug_treatment_mapping_condition',
         'idx_drug_treatment_mapping_product_ndc',
     ]:
-        await db.status(f"ALTER INDEX IF EXISTS {schema}.{prefix} RENAME TO {prefix}_old;")
         await db.status(f"ALTER INDEX IF EXISTS {schema}.{prefix}_{import_date} RENAME TO {prefix};")
 
 
@@ -345,7 +343,7 @@ async def import_drug_indications(test_mode=False, import_id=None):
         raise RuntimeError(f"Drug indication stage has {evidence_count} rows, below minimum {min_rows}.")
 
     async with db.transaction():
-        await _swap(schema, import_date)
+        await _publish(schema, import_date)
 
     result = {
         'import_id': import_date,
