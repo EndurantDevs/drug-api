@@ -13,14 +13,13 @@ from asyncpg.connection import ServerCapabilities
 from dotenv import load_dotenv
 from sanic import Sanic
 
-from api import init_api
-from db.migrator import db_group
-
 env_path = Path(__file__).absolute().parent / '.env'
 load_dotenv(dotenv_path=env_path)
 with open(os.environ['HLTHPRT_LOG_CFG'], encoding="utf-8") as fobj:
     logging.config.dictConfig(yaml.safe_load(fobj))
 
+from api import init_api
+from db.migrator import db_group
 from process import process_group
 
 uvloop.install()

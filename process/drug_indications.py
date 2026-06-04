@@ -9,6 +9,8 @@ import asyncpg
 
 from db.connection import init_db
 from db.models import DrugConditionEvidence, Label, Product, db
+from process.control_lifecycle import mark_control_run
+from process.live_progress import enqueue_live_progress
 from process.ext.utils import make_class, push_objects, print_time_info
 
 NLM_ATTRIBUTION = (
@@ -259,12 +261,19 @@ async def _publish(schema, import_date):
         await db.status(f"ALTER INDEX IF EXISTS {schema}.{prefix}_{import_date} RENAME TO {prefix};")
 
 
-async def import_drug_indications(test_mode=False, import_id=None):
+async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
     start = datetime.datetime.now()
     import_date = _import_date(import_id)
     schema = _schema()
     batch_size = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_BATCH_SIZE', '1000'))
     test_limit = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_TEST_LIMIT', '5000'))
+    await mark_control_run(
+        run_id,
+        status="running",
+        phase_detail="drug indications scanning labels",
+        progress_message="scanning labels",
+        progress={"unit": "labels", "done": 0, "total": test_limit if test_mode else None, "pct": 0, "message": "scanning labels"},
+    )
 
     await db.status(f"CREATE SCHEMA IF NOT EXISTS {schema};")
     evidence_cls = make_class(DrugConditionEvidence, import_date)
@@ -290,23 +299,39 @@ async def import_drug_indications(test_mode=False, import_id=None):
             if len(evidence_batch) >= batch_size:
                 await push_objects(evidence_batch, evidence_cls)
                 evidence_batch = []
+                enqueue_live_progress(
+                    run_id=run_id,
+                    importer="drug-indications",
+                    status="running",
+                    phase="drug indications scanning labels",
+                    unit="labels",
+                    done=scanned,
+                    total=test_limit if test_mode else None,
+                    message=f"scanned {scanned} labels; matched {matched}",
+                )
             if test_mode and scanned >= test_limit:
                 break
 
     await push_objects(evidence_batch, evidence_cls)
     await _create_indexes(schema, evidence_cls, import_date)
 
-    min_rows = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_MIN_ROWS', '1' if test_mode else '100'))
+    min_rows = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_MIN_ROWS', '0' if test_mode else '100'))
     allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
     evidence_count = await db.func.count(evidence_cls.evidence_id).gino.scalar()
     if evidence_count < min_rows and not allow_empty:
         raise RuntimeError(f"Drug indication stage has {evidence_count} rows, below minimum {min_rows}.")
 
-    async with db.transaction():
-        await _publish(schema, import_date)
+    publish_test_mode = os.getenv('HLTHPRT_DRUG_INDICATIONS_PUBLISH_TEST_MODE', '').lower() in {'1', 'true', 'yes'}
+    published = False
+    if not test_mode or publish_test_mode:
+        async with db.transaction():
+            await _publish(schema, import_date)
+        published = True
 
     result = {
         'import_id': import_date,
+        'stage_table': evidence_cls.__tablename__,
+        'published': published,
         'labels_scanned': scanned,
         'condition_evidence_rows': evidence_count,
         'matched_labels': matched,

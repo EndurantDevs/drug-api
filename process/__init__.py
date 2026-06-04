@@ -4,15 +4,19 @@ import os
 import click
 import msgpack
 import uvloop
-from arq.connections import RedisSettings
 
+from db.connection import init_db
+from db.models import db
 from process.label import download_label_content, init_label_file, label_shutdown, label_startup
 from process.label import main as initiate_label_import
 from process.label import process_label_results
+from process.control_lifecycle import control_single_job_start
+from process.drug_indications import import_drug_indications
 from process.drug_indications import main as initiate_drug_indications_import
 from process.ndc_product import download_content, init_file
 from process.ndc_product import main as initiate_product_import
 from process.ndc_product import process_results, shutdown, startup
+from process.redis_config import redis_settings
 
 uvloop.install()
 
@@ -29,24 +33,40 @@ LABEL_QUEUE_NAME = (
 
 
 class NDC:
-    functions = [init_file, download_content, process_results]
+    functions = [init_file, download_content, process_results, control_single_job_start]
     on_startup = startup
     on_shutdown = shutdown
     queue_name = NDC_QUEUE_NAME
-    redis_settings = RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS'))
+    redis_settings = redis_settings()
     job_serializer = msgpack.packb
     job_deserializer = lambda b: msgpack.unpackb(b, raw=False)
 
 
 class Labeling:
-    functions = [download_label_content, process_label_results, init_label_file]
+    functions = [download_label_content, process_label_results, init_label_file, control_single_job_start]
     on_startup = label_startup
     on_shutdown = label_shutdown
     queue_name = LABEL_QUEUE_NAME
     queue_read_limit = 10
-    redis_settings = RedisSettings.from_dsn(os.environ.get('HLTHPRT_REDIS_ADDRESS'))
+    redis_settings = redis_settings()
     job_serializer = msgpack.packb
     job_deserializer = lambda b: msgpack.unpackb(b, raw=False)
+
+
+class DrugIndications:
+    functions = [control_single_job_start]
+    on_startup = lambda ctx: init_db(db, asyncio.get_event_loop())
+    on_shutdown = lambda ctx: _close_db_bind()
+    queue_name = 'arq:queue:drug-api-import-indications'
+    redis_settings = redis_settings()
+    job_serializer = msgpack.packb
+    job_deserializer = lambda b: msgpack.unpackb(b, raw=False)
+
+
+async def _close_db_bind():
+    bind = db.pop_bind()
+    if bind is not None:
+        await bind.close()
 
 
 @click.group()
