@@ -15,8 +15,8 @@ from sqlalchemy.inspection import inspect
 
 from db.connection import init_db
 from db.models import Label, db
-from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
 from process.control_lifecycle import mark_control_run
+from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
 from process.live_progress import enqueue_live_progress
 from process.redis_config import redis_settings
 

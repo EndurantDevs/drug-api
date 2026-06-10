@@ -3,8 +3,7 @@ import json
 import pytest
 
 from api import control_imports
-from process import import_status_events
-from process import live_progress
+from process import import_status_events, live_progress
 
 
 def test_status_event_noops_without_import_control_url(monkeypatch):

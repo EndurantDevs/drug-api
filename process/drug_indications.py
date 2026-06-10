@@ -10,8 +10,8 @@ import asyncpg
 from db.connection import init_db
 from db.models import DrugConditionEvidence, Label, Product, db
 from process.control_lifecycle import mark_control_run
+from process.ext.utils import make_class, print_time_info, push_objects
 from process.live_progress import enqueue_live_progress
-from process.ext.utils import make_class, push_objects, print_time_info
 
 NLM_ATTRIBUTION = (
     "This product uses publicly available data from the U.S. National Library of Medicine (NLM), "

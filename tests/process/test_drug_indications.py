@@ -1,5 +1,5 @@
-import types
 import importlib
+import types
 
 drug_indications = importlib.import_module("process.drug_indications")
 

@@ -6,15 +6,8 @@ import os
 from sanic import Blueprint, response
 from sanic.exceptions import BadRequest, NotFound, SanicException
 
-from api.control_imports import (
-    create_import_run,
-    get_import_run,
-    importer_registry,
-    list_import_runs,
-    node_health,
-    request_cancel,
-    retry_import_run,
-)
+from api.control_imports import (create_import_run, get_import_run, importer_registry, list_import_runs, node_health,
+                                 request_cancel, retry_import_run)
 from api.control_workers import ensure_worker, worker_registry
 
 blueprint = Blueprint("control", url_prefix="/control/v1")
