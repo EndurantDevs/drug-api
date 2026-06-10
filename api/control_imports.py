@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 import msgpack
+import redis
 from arq import create_pool
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -14,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from db.models import db
 from process.import_status_events import enqueue_status_event
 from process.live_progress import enqueue_live_progress, estimate_payload_from_live, progress_payload_from_live, read_live_progress
-from process.redis_config import redis_settings
+from process.redis_config import redis_dsn, redis_settings
 
 ENGINE_NAME = "drug-api"
 ACTIVE_STATUSES = {"queued", "starting", "running", "finalizing", "canceling"}
@@ -116,6 +117,7 @@ def importer_registry() -> list[dict[str, Any]]:
             "cancelable": False,
             "retryable": True,
             "enqueue_adapter": "arq_single_job",
+            "queue": spec["queue"],
             "params_schema": _params_schema(name),
         }
         for name, spec in sorted(_IMPORTERS.items())
@@ -137,7 +139,49 @@ def _params_schema(name: str) -> list[dict[str, Any]]:
 
 
 def node_health() -> dict[str, Any]:
-    return {"engine": ENGINE_NAME, "node_id": os.getenv("HLTHPRT_IMPORT_NODE_ID"), "status": "ok", "time": utc_now().isoformat(), "features": {"control_api": True, "enqueue_adapters": True, "enqueue_adapter_count": len(_IMPORTERS)}}
+    return {
+        "engine": ENGINE_NAME,
+        "node_id": os.getenv("HLTHPRT_IMPORT_NODE_ID"),
+        "status": "ok",
+        "time": utc_now().isoformat(),
+        "features": {
+            "control_api": True,
+            "enqueue_adapters": True,
+            "enqueue_adapter_count": len(_IMPORTERS),
+        },
+        "queue_depth": _queue_depths(),
+        "workers": _worker_health(),
+    }
+
+
+def _worker_health() -> dict[str, Any]:
+    try:
+        from api.control_workers import worker_registry  # pylint: disable=import-outside-toplevel
+
+        return {
+            item["queue"]: {
+                "worker_class": item["worker_class"],
+                "role": item["role"],
+                "running": item["running"],
+                "pid": item.get("pid"),
+            }
+            for item in worker_registry()
+        }
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {}
+
+
+def _queue_depths() -> dict[str, int]:
+    queues = {
+        str(spec.get("queue"))
+        for spec in _IMPORTERS.values()
+        if str(spec.get("queue") or "").strip()
+    }
+    try:
+        client = redis.Redis.from_url(redis_dsn(), socket_connect_timeout=1.0, socket_timeout=1.0)
+        return {queue: int(client.zcard(queue) or 0) for queue in sorted(queues)}
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {}
 
 
 async def create_import_run(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:

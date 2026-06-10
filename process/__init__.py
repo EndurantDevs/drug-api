@@ -56,17 +56,11 @@ class Labeling:
 class DrugIndications:
     functions = [control_single_job_start]
     on_startup = lambda ctx: init_db(db, asyncio.get_event_loop())
-    on_shutdown = lambda ctx: _close_db_bind()
+    on_shutdown = lambda ctx: db.disconnect()
     queue_name = 'arq:queue:drug-api-import-indications'
     redis_settings = redis_settings()
     job_serializer = msgpack.packb
     job_deserializer = lambda b: msgpack.unpackb(b, raw=False)
-
-
-async def _close_db_bind():
-    bind = db.pop_bind()
-    if bind is not None:
-        await bind.close()
 
 
 @click.group()

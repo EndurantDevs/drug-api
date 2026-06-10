@@ -2,6 +2,7 @@ from datetime import datetime
 
 from asyncpg.exceptions import InterfaceError, PostgresError
 from sanic import Blueprint, response
+from sqlalchemy.exc import SQLAlchemyError
 
 from db.models import Product
 
@@ -22,11 +23,11 @@ async def healthcheck(request):
 
 async def _check_db():
     try:
-        await Product.load(Product.product_id).limit(1).gino.first()
+        await Product.load(Product.product_id).limit(1).first()
         return {
             'status': 'OK'
         }
-    except (PostgresError, InterfaceError, ConnectionRefusedError) as ex:
+    except (PostgresError, InterfaceError, ConnectionRefusedError, SQLAlchemyError) as ex:
         return {
             'status': 'Fail',
             'details': str(ex)

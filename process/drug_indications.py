@@ -278,11 +278,11 @@ async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
     await db.status(f"CREATE SCHEMA IF NOT EXISTS {schema};")
     evidence_cls = make_class(DrugConditionEvidence, import_date)
     await db.status(f"DROP TABLE IF EXISTS {schema}.{evidence_cls.__tablename__};")
-    await evidence_cls.__table__.gino.create()
+    await db.create_table(evidence_cls.__table__)
 
     rxnorm_by_product = {}
     async with db.transaction():
-        async for product in Product.query.gino.iterate():
+        async for product in Product.query.iterate():
             if getattr(product, 'product_ndc', None):
                 rxnorm_by_product[product.product_ndc] = list(getattr(product, 'rxnorm_ids', None) or [])
     relationships_by_rxnorm = await _load_official_condition_context(test_mode=test_mode)
@@ -291,7 +291,7 @@ async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
     scanned = 0
     matched = 0
     async with db.transaction():
-        async for label in Label.query.gino.iterate():
+        async for label in Label.query.iterate():
             scanned += 1
             for row in _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
                 evidence_batch.append(row)
@@ -317,7 +317,7 @@ async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
 
     min_rows = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_MIN_ROWS', '0' if test_mode else '100'))
     allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
-    evidence_count = await db.func.count(evidence_cls.evidence_id).gino.scalar()
+    evidence_count = await db.select(db.func.count(evidence_cls.evidence_id)).scalar()
     if evidence_count < min_rows and not allow_empty:
         raise RuntimeError(f"Drug indication stage has {evidence_count} rows, below minimum {min_rows}.")
 
@@ -348,6 +348,4 @@ async def main(test_mode=False, import_id=None):
     try:
         return await import_drug_indications(test_mode=test_mode, import_id=import_id)
     finally:
-        bind = db.pop_bind()
-        if bind is not None:
-            await bind.close()
+        await db.disconnect()
