@@ -13,10 +13,9 @@ handlers:
     stream: ext://sys.stdout
 
 loggers:
-  gino:
+  sqlalchemy.engine:
     level: WARNING
     handlers: [console]
   arq:
     level: DEBUG
     handlers: [console]
-

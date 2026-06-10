@@ -1,4 +1,3 @@
-import asyncio
 import urllib.parse
 from datetime import datetime
 
@@ -15,14 +14,13 @@ blueprint = Blueprint('drug', url_prefix='/drug', version=1)
 @blueprint.get('/')
 async def drug_status(request):
     async def get_product_count():
-        async with db.acquire():
-            return await db.func.count(Product.product_id).gino.scalar()
+        return await db.select(db.func.count(Product.product_id)).scalar()
 
     async def get_package_count():
-        async with db.acquire():
-            return await db.func.count(Package.package_ndc).gino.scalar()
+        return await db.select(db.func.count(Package.package_ndc)).scalar()
 
-    product_count, package_count = await asyncio.gather(get_product_count(), get_package_count())
+    product_count = await get_product_count()
+    package_count = await get_package_count()
     data = {
         'date': datetime.utcnow().isoformat(),
         'release': request.app.config.get('RELEASE'),
@@ -36,7 +34,7 @@ async def drug_status(request):
 
 @blueprint.get('/ndc/<product_ndc>')
 async def product_ndc_obj(request, product_ndc):
-    data = await Product.query.where(Product.product_ndc == product_ndc).gino.first()
+    data = await Product.query.where(Product.product_ndc == product_ndc).first()
     if data:
         return response.json(data.to_json_dict())
     raise sanic.exceptions.NotFound
@@ -46,7 +44,7 @@ async def product_ndc_obj(request, product_ndc):
 async def product_packages_obj(request, product_ndc):
     data = []
 
-    q = Package.query.where(Package.product_ndc == product_ndc).gino
+    q = Package.query.where(Package.product_ndc == product_ndc)
     #
     #
     #     db.select([
@@ -56,7 +54,7 @@ async def product_packages_obj(request, product_ndc):
     #     User.outerjoin(Visit)
     # ).group_by(
     #     *User,
-    # ).gino.load((User, ColumnLoader(visits)))
+    # ).load((User, ColumnLoader(visits)))
 
     async with db.transaction():
         async for package in q.iterate():
@@ -67,10 +65,10 @@ async def product_packages_obj(request, product_ndc):
 
 @blueprint.get('/ndc/package/<package_ndc>')
 async def package_product_ndc_obj(request, package_ndc):
-    data = await Package.query.where(Package.package_ndc == package_ndc).gino.first()
+    data = await Package.query.where(Package.package_ndc == package_ndc).first()
     if data:
         obj = data.to_json_dict()
-        data = await Product.query.where(Product.product_ndc == obj['product_ndc']).gino.first()
+        data = await Product.query.where(Product.product_ndc == obj['product_ndc']).first()
         obj['product'] = data.to_json_dict()
         return response.json(obj)
     raise sanic.exceptions.NotFound
@@ -78,16 +76,16 @@ async def package_product_ndc_obj(request, package_ndc):
 
 @blueprint.get('/label/package/<package_ndc>')
 async def package_ndc_obj(request, package_ndc):
-    data = await Package.query.where(Package.package_ndc == package_ndc).gino.first()
+    data = await Package.query.where(Package.package_ndc == package_ndc).first()
     if data:
         obj = data.to_json_dict()
-        data = await Product.query.where(Product.product_ndc == obj['product_ndc']).gino.first()
+        data = await Product.query.where(Product.product_ndc == obj['product_ndc']).first()
         obj['product'] = data.to_json_dict()
         data = None
         if 'spl_id' in obj['product'] and obj['product']['spl_id']:
-            data = await Label.query.where(Label.id == obj['product']['spl_id']).gino.first()
+            data = await Label.query.where(Label.id == obj['product']['spl_id']).first()
             if not data:
-                data = await Label.query.where(Label.set_id == obj['product']['spl_id']).gino.first()
+                data = await Label.query.where(Label.set_id == obj['product']['spl_id']).first()
         if data:
             obj['label'] = data.to_json_dict()
         return response.json(obj)
@@ -96,14 +94,14 @@ async def package_ndc_obj(request, package_ndc):
 
 @blueprint.get('/label/product/<product_ndc>')
 async def label_product_ndc_obj(request, product_ndc):
-    data = await Product.query.where(Product.product_ndc == product_ndc).gino.first()
+    data = await Product.query.where(Product.product_ndc == product_ndc).first()
     if data:
         obj = data.to_json_dict()
         data = None
         if 'spl_id' in obj and obj['spl_id']:
-            data = await Label.query.where(Label.id == obj['spl_id']).gino.first()
+            data = await Label.query.where(Label.id == obj['spl_id']).first()
             if not data:
-                data = await Label.query.where(Label.set_id == obj['spl_id']).gino.first()
+                data = await Label.query.where(Label.set_id == obj['spl_id']).first()
         if data:
             obj['label'] = data.to_json_dict()
         return response.json(obj)
@@ -128,7 +126,7 @@ async def list_product_all(request, letter='a', page=0, results_per_page = 49999
 
     data = []
     q = db.select([Product.product_ndc, Product.generic_name, Product.brand_name]).order_by(Product.generic_name, Product.brand_name).limit(
-        results_per_page).offset(results_per_page * page).gino
+        results_per_page).offset(results_per_page * page)
 
 
     async with db.transaction():
@@ -160,7 +158,7 @@ async def list_product_letter(request, letter, page=0, results_per_page = 100):
     data = []
     q = db.select([Product.product_ndc, Product.generic_name]).where(
         Product.generic_name.ilike(f"{letter}%")).order_by(Product.generic_name, Product.brand_name).limit(
-        results_per_page).offset(results_per_page * page).gino
+        results_per_page).offset(results_per_page * page)
 
 
     async with db.transaction():
@@ -247,7 +245,7 @@ async def conditions_by_rxnorm(request, rxnorm_id):
     rxnorm_id = rxnorm_id.strip()
     limit = min(int(request.args.get('limit', 100)), 500)
     data = []
-    q = DrugConditionEvidence.query.where(DrugConditionEvidence.rxnorm_ids.contains([rxnorm_id])).limit(limit).gino
+    q = DrugConditionEvidence.query.where(DrugConditionEvidence.rxnorm_ids.contains([rxnorm_id])).limit(limit)
     async with db.transaction():
         async for row in q.iterate():
             data.append(row.to_json_dict())
@@ -261,7 +259,7 @@ async def conditions_by_product_ndc(request, product_ndc):
     product_ndc = product_ndc.strip()
     limit = min(int(request.args.get('limit', 100)), 500)
     data = []
-    q = DrugConditionEvidence.query.where(DrugConditionEvidence.product_ndc.contains([product_ndc])).limit(limit).gino
+    q = DrugConditionEvidence.query.where(DrugConditionEvidence.product_ndc.contains([product_ndc])).limit(limit)
     async with db.transaction():
         async for row in q.iterate():
             data.append(row.to_json_dict())
@@ -274,7 +272,7 @@ async def conditions_by_product_ndc(request, product_ndc):
 async def condition_evidence_by_label(request, set_id):
     set_id = set_id.strip()
     data = []
-    q = DrugConditionEvidence.query.where(DrugConditionEvidence.set_id == set_id).gino
+    q = DrugConditionEvidence.query.where(DrugConditionEvidence.set_id == set_id)
     async with db.transaction():
         async for row in q.iterate():
             data.append(row.to_json_dict())

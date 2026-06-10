@@ -238,8 +238,8 @@ async def startup(ctx):
     await db.status(f"DROP TABLE IF EXISTS {db_schema}.package_{import_date};")
     myproduct = make_class(Product, import_date)
     mypackage = make_class(Package, import_date)
-    await myproduct.__table__.gino.create()
-    await mypackage.__table__.gino.create()
+    await db.create_table(myproduct.__table__)
+    await db.create_table(mypackage.__table__)
     print("Preparing done")
 
 
@@ -266,7 +266,7 @@ async def _shutdown_impl(ctx):
     control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
     if ctx['context'].get('product_count'):
         myproduct = make_class(Product, import_date)
-        import_product_count = await db.func.count(myproduct.product_id).gino.scalar()  # pylint: disable=E1101
+        import_product_count = await db.select(db.func.count(myproduct.product_id)).scalar()
         expected_product_count = int(ctx['context']['product_count'])
         minimum_expected = int(expected_product_count * 0.95)
         if import_product_count and import_product_count >= minimum_expected:
@@ -327,8 +327,8 @@ async def _shutdown_impl(ctx):
                     await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table}_{import_date} RENAME TO {table};")
 
             print('Products in JSON:', expected_product_count)
-            print('Products in DB: ', await db.func.count(Product.product_id).gino.scalar())  # pylint: disable=E1101
-            print('Packages in DB: ', await db.func.count(Package.package_ndc).gino.scalar())  # pylint: disable=E1101
+            print('Products in DB: ', await db.select(db.func.count(Product.product_id)).scalar())
+            print('Packages in DB: ', await db.select(db.func.count(Package.package_ndc)).scalar())
             if import_product_count != expected_product_count:
                 print(
                     f"WARNING: Source total_records ({expected_product_count}) "

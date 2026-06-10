@@ -162,7 +162,7 @@ async def label_startup(ctx):
     await db.status(f"CREATE SCHEMA IF NOT EXISTS {db_schema};")
     await db.status(f"DROP TABLE IF EXISTS {db_schema}.label_{import_date};")
     mylabel = make_class(Label, import_date)
-    await mylabel.__table__.gino.create()
+    await db.create_table(mylabel.__table__)
 
 
 async def label_shutdown(ctx):
@@ -188,7 +188,7 @@ async def _label_shutdown_impl(ctx):
     control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
     if ctx['context'].get('label_count'):
         mylabel = make_class(Label, import_date)
-        import_mylabel_count = await db.func.count(mylabel.id).gino.scalar()  # pylint: disable=E1101
+        import_mylabel_count = await db.select(db.func.count(mylabel.id)).scalar()
         if import_mylabel_count == ctx['context']['label_count']:
             db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
             for table in ['label']:
@@ -231,7 +231,7 @@ async def _label_shutdown_impl(ctx):
                                     f"{db_schema}.{table}_{import_date} RENAME TO {table};")
 
             print('Labeling rows in JSON:', ctx['context']['label_count'])
-            print('Labling rows in DB: ', await db.func.count(Label.id).gino.scalar())  # pylint: disable=E1101
+            print('Labling rows in DB: ', await db.select(db.func.count(Label.id)).scalar())
             print_time_info(ctx['context']['start'])
             await mark_control_run(
                 control_run_id,

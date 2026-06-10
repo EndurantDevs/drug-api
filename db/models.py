@@ -84,7 +84,7 @@ class Label(db.Model, JSONOutputMixin):
     pharmacokinetics = Column(String)
     pharmacokinetics_table = Column(String)
     effective_time = Column(String)
-    id = Column(String)
+    id = Column(String, primary_key=True)
     set_id = Column(String)
     version = Column(String)
     active_ingredient = Column(String)

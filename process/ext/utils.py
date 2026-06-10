@@ -5,10 +5,13 @@ import humanize
 from aiofile import async_open
 from arq import Retry
 from asyncpg.exceptions import UniqueViolationError
-from gino.exceptions import GinoException
+from sqlalchemy.exc import SQLAlchemyError
+
+from db.connection import Base
 
 HTTP_CHUNK_SIZE = 512 * 1024
 headers = {'user-agent': 'Healthporta Drug API Importer, https://github.com/EndurantDevs/drug-api'}
+_MODEL_CACHE = {}
 
 
 async def download_it(url):
@@ -35,33 +38,40 @@ async def download_it_and_save(url, filepath):
                     raise Retry()
 
 
-def make_class(Base, table_suffix):
-    temp = None
-    if hasattr(Base, '__table__'):
-        try:
-            temp = Base.__table__
-            delattr(Base, '__table__')
-        except AttributeError:
-            pass
+def make_class(model_cls, table_suffix):
+    key = (model_cls, str(table_suffix))
+    if key in _MODEL_CACHE:
+        return _MODEL_CACHE[key]
 
-    class MyClass(Base):
-        __tablename__ = '_'.join([Base.__tablename__, table_suffix])
+    table_name = '_'.join([model_cls.__tablename__, str(table_suffix)])
+    source_table = model_cls.__table__
+    table_key = f"{source_table.schema}.{table_name}" if source_table.schema else table_name
+    table = Base.metadata.tables.get(table_key)
+    if table is None:
+        table = source_table.to_metadata(Base.metadata, name=table_name, schema=source_table.schema)
 
-    if temp is not None:
-        Base.__table__ = temp
-
-    return MyClass
+    cls = type(
+        f"{model_cls.__name__}_{table_suffix}",
+        (Base,),
+        {
+            "__module__": model_cls.__module__,
+            "__table__": table,
+        },
+    )
+    cls.__tablename__ = table_name
+    _MODEL_CACHE[key] = cls
+    return cls
 
 
 async def push_objects(obj_list, cls):
     if obj_list:
         try:
-            await cls.insert().gino.all(obj_list)
-        except (GinoException, UniqueViolationError):
+            await cls.insert().all(obj_list)
+        except (SQLAlchemyError, UniqueViolationError):
             for obj in obj_list:
                 try:
-                    await cls.insert().gino.all([obj])
-                except (GinoException, UniqueViolationError) as e:
+                    await cls.insert().all([obj])
+                except (SQLAlchemyError, UniqueViolationError) as e:
                     print(e)
 
 

@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Project Snapshot
-- Service: `drug-api` (Python/Sanic + GINO/PostgreSQL + ARQ/Redis).
+- Service: `drug-api` (Python/Sanic + SQLAlchemy async/PostgreSQL via asyncpg + ARQ/Redis).
 - Primary datasets: OpenFDA `drug/ndc` and `drug/label` partition files.
 - Runtime entrypoint in container: `/usr/local/bin/start_api.sh`.
 
