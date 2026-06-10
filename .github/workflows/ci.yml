@@ -53,3 +53,21 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Run pip audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip-audit -r requirements-dev.txt
