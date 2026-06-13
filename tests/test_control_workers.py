@@ -66,6 +66,7 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "ghcr.io/endurantdevs/drug-api:dev")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_ENV_FROM_CONFIGMAP", "drug-api-config")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_ENV_FROM_SECRET", "drug-api-secret")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_ACTIVE_DEADLINE_SECONDS", "43200")
     monkeypatch.setenv("HLTHPRT_IMPORT_NODE_ID", "local_drug")
     monkeypatch.setattr(control_workers, "_kubernetes_configured", lambda: True)
     monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "healthporta-dev")
@@ -83,6 +84,7 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     assert container["command"][-2:] == ["process.NDC", "--burst"]
     assert {"configMapRef": {"name": "drug-api-config"}} in container["envFrom"]
     assert {"secretRef": {"name": "drug-api-secret"}} in container["envFrom"]
+    assert job["spec"]["activeDeadlineSeconds"] == 43200
 
 
 def test_find_running_pid_ignores_other_node_worker(monkeypatch):

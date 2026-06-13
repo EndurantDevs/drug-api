@@ -259,6 +259,17 @@ def _worker_job_manifest(spec: WorkerSpec, payload: dict[str, Any], image: str) 
     run_id = str(payload.get("run_id") or "").strip()
     if run_id:
         labels["healthporta.com/run-id-hash"] = _label_hash(run_id)
+    job_spec: dict[str, Any] = {
+        "backoffLimit": int(os.getenv("HLTHPRT_WORKER_JOB_BACKOFF_LIMIT", "0")),
+        "ttlSecondsAfterFinished": int(os.getenv("HLTHPRT_WORKER_JOB_TTL_SECONDS", "86400")),
+        "template": {
+            "metadata": {"labels": labels},
+            "spec": pod_spec,
+        },
+    }
+    active_deadline_seconds = int(os.getenv("HLTHPRT_WORKER_JOB_ACTIVE_DEADLINE_SECONDS", "0") or "0")
+    if active_deadline_seconds > 0:
+        job_spec["activeDeadlineSeconds"] = active_deadline_seconds
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -272,14 +283,7 @@ def _worker_job_manifest(spec: WorkerSpec, payload: dict[str, Any], image: str) 
                 "healthporta.com/run-id": run_id,
             },
         },
-        "spec": {
-            "backoffLimit": int(os.getenv("HLTHPRT_WORKER_JOB_BACKOFF_LIMIT", "0")),
-            "ttlSecondsAfterFinished": int(os.getenv("HLTHPRT_WORKER_JOB_TTL_SECONDS", "86400")),
-            "template": {
-                "metadata": {"labels": labels},
-                "spec": pod_spec,
-            },
-        },
+        "spec": job_spec,
     }
 
 
