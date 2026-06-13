@@ -2,6 +2,8 @@ import json
 from datetime import date, datetime
 from uuid import UUID
 
+from sqlalchemy import inspect
+
 
 class JSONOutputMixin:
 
@@ -56,11 +58,11 @@ class JSONOutputMixin:
         return json.dumps(self.to_dict(), default=extended_encoder)
 
     def _get_column_items(self):
-        for column in type(self):
-            value = getattr(self, column.name)
+        for column in inspect(type(self)).columns:
+            value = getattr(self, column.key)
             if (value is None) and (column.default is not None):
                 value = column.default.arg
-            yield column.name, value
+            yield column.key, value
 
     def _get_executable_fields(self):
         return {key: value(self) for key, value in type(self).EXECUTABLE_FIELDS.items()}

@@ -11,7 +11,7 @@ import ijson
 import msgpack
 from aiofile import async_open
 from arq import create_pool
-from async_unzip.unzipper import unzip
+from async_unzip import unzip
 from dateutil.parser import parse as parse_date
 from sqlalchemy.inspection import inspect
 
