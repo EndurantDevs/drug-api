@@ -115,9 +115,30 @@ async def get_products_by_rxnorm(rxnorm_id):
     return [row.to_json_dict() for row in rows]
 
 
+def _product_ndc_from_selected_row(row):
+    if not row:
+        return None
+    if isinstance(row, str):
+        return row
+
+    value = getattr(row, "product_ndc", None)
+    if value:
+        return value
+
+    if hasattr(row, "get"):
+        value = row.get("product_ndc")
+        if value:
+            return value
+
+    try:
+        return row[0]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
 async def get_packages_by_rxnorm(rxnorm_id):
     products = await db.select([Product.product_ndc]).where(Product.rxnorm_ids.contains([rxnorm_id])).all()
-    product_ids = [row[0] for row in products if row and row[0]]
+    product_ids = [_product_ndc_from_selected_row(row) for row in products]
     product_ids = [pid for pid in product_ids if pid]
     if not product_ids:
         return []
