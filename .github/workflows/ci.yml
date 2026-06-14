@@ -1,73 +1,241 @@
 name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  PYTHON_VERSION: "3.14"
 
 jobs:
-  lint:
+  public-hygiene:
+    name: public hygiene
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - name: Check public repository hygiene
+        run: python scripts/ci/public_hygiene.py
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+  python-quality:
+    name: python quality and focused tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
-          cache: "pip"
-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
-
-      - name: Autofix imports with isort
-        run: isort api db process tests main.py
-
-      - name: Fail when autofixes are needed
-        run: git diff --exit-code
-
+          python -m pip install -r requirements-dev.txt
+      - name: Check import ordering
+        run: isort --check-only api db process tests main.py
       - name: Run flake8
         run: flake8 api db process tests main.py
-
-      - name: Run pylint
+      - name: Run pylint errors
         run: pylint --errors-only --disable=no-member api db process tests main.py
+      - name: Compile service modules
+        run: python -m compileall api process db scripts main.py
+      - name: Guard request-time external calls
+        run: python scripts/ci/request_time_external_call_guard.py
+      - name: Run control-plane unit tests
+        run: python -m pytest -q tests/test_control_workers.py tests/test_import_status_events.py
 
-  test:
+  api-contract:
+    name: openapi contract
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
-          cache: "pip"
-
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          python -m pip install -r requirements-dev.txt
+      - name: Run OpenAPI/spec checks
+        run: python -m pytest -q tests/test_openapi_spec.py tests/api/test_query_compilation.py
 
-      - name: Run tests
-        run: pytest -q
-
-  security-audit:
+  test:
+    name: full unit test suite
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
-          cache: "pip"
-
-      - name: Run pip audit
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          python -m pip install -r requirements-dev.txt
+      - name: Run tests
+        run: python -m pytest -q
+
+  security:
+    name: dependency and semgrep security
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Python dependency audit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit
+          pip-audit -r requirements.txt
           pip-audit -r requirements-dev.txt
+      - name: Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: .semgrep.yml
+
+  docker-image-build:
+    name: docker image and runtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: healthporta_drug_docker_smoke
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d healthporta_drug_docker_smoke"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Python 3.14 image
+        run: docker build --pull --tag drug-api:ci .
+      - name: Runtime health smoke
+        run: |
+          docker run --rm -d --name drug-api-ci --network host \
+            -e HLTHPRT_DB_HOST=127.0.0.1 \
+            -e HLTHPRT_DB_PORT=5432 \
+            -e HLTHPRT_DB_USER=postgres \
+            -e HLTHPRT_DB_PASSWORD=postgres \
+            -e HLTHPRT_DB_DATABASE=healthporta_drug_docker_smoke \
+            -e HLTHPRT_DB_SCHEMA=rx_data \
+            -e DB_SCHEMA=rx_data \
+            drug-api:ci
+          trap 'docker logs drug-api-ci || true; docker rm -f drug-api-ci || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/v1/healthcheck/ >/tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+  postgres18-db-tests:
+    name: postgres18 migration and importer tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: healthporta_drug_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d healthporta_drug_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      HLTHPRT_ENVIRONMENT: test
+      HLTHPRT_DB_DRIVER: asyncpg
+      HLTHPRT_DB_HOST: 127.0.0.1
+      HLTHPRT_DB_PORT: "5432"
+      HLTHPRT_DB_USER: postgres
+      HLTHPRT_DB_PASSWORD: postgres
+      HLTHPRT_DB_DATABASE: healthporta_drug_ci
+      HLTHPRT_DB_SCHEMA: rx_data
+      DB_SCHEMA: rx_data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Run Alembic migrations
+        run: alembic upgrade head
+      - name: Run importer database tests
+        run: >
+          python -m pytest -q
+          tests/process/test_import_table_switching.py
+          tests/process/test_ndc_rxnorm_mapping.py
+          tests/process/test_drug_indications.py
+
+  redis-worker-smoke:
+    name: redis worker queue smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      HLTHPRT_REDIS_ADDRESS: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Verify Redis queue depth path
+        run: |
+          python - <<'PY'
+          import asyncio
+          from redis.asyncio import Redis
+
+          async def main():
+              redis = Redis(host="127.0.0.1", port=6379, decode_responses=True)
+              await redis.rpush("arq:ci-smoke", "healthporta-ci")
+              assert await redis.llen("arq:ci-smoke") == 1
+              await redis.delete("arq:ci-smoke")
+              await redis.aclose()
+
+          asyncio.run(main())
+          PY
+      - name: Run worker control tests
+        run: python -m pytest -q tests/test_control_workers.py tests/test_import_status_events.py
