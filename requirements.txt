@@ -25,6 +25,7 @@ packaging==25.0
 pyaml==25.7.0
 pydantic==1.10.24
 pyparsing==3.2.5
+psycopg2-binary==2.9.12
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
 pytz==2025.2

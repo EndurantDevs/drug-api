@@ -5,9 +5,9 @@ Revises: None
 Create Date: 2026-02-13 00:00:00
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "3a9f2f5e4c1b"
@@ -20,6 +20,10 @@ SCHEMA = "rx_data"
 TABLE = "product"
 INDEX = "product_rxnorm_idx"
 COLUMN = "rxnorm_ids"
+
+
+def _table_exists(inspector):
+    return inspector.has_table(TABLE, schema=SCHEMA)
 
 
 def _column_exists(inspector):
@@ -35,6 +39,8 @@ def _index_exists(inspector):
 def upgrade():
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if not _table_exists(inspector):
+        return
 
     if not _column_exists(inspector):
         op.add_column(TABLE, sa.Column(COLUMN, sa.ARRAY(sa.String()), nullable=True), schema=SCHEMA)
@@ -47,6 +53,8 @@ def upgrade():
 def downgrade():
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    if not _table_exists(inspector):
+        return
 
     if _index_exists(inspector):
         op.drop_index(INDEX, table_name=TABLE, schema=SCHEMA)

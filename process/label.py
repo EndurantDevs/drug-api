@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import logging
 import os
 import tempfile
 from json import loads
@@ -19,6 +20,8 @@ from process.control_lifecycle import mark_control_run
 from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
 from process.live_progress import enqueue_live_progress
 from process.redis_config import redis_settings
+
+logger = logging.getLogger(__name__)
 
 LABEL_QUEUE_NAME = (
     os.environ.get('HLTHPRT_ARQ_QUEUE_LABEL')
@@ -178,8 +181,8 @@ async def label_shutdown(ctx):
                 progress_message="failed",
                 error={"code": "shutdown_failed", "message": str(exc)},
             )
-        except Exception:
-            pass
+        except Exception as mark_exc:
+            logger.warning("failed to mark label import shutdown failure: %s", mark_exc)
         raise
 
 

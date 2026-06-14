@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 import urllib.request
@@ -9,6 +10,7 @@ from typing import Any
 
 ENGINE_NAME = "drug-api"
 TERMINAL_STATUSES = {"succeeded", "failed", "canceled", "cancelled", "dead_letter"}
+logger = logging.getLogger(__name__)
 
 _queue: asyncio.Queue[dict[str, Any]] | None = None
 _worker: asyncio.Task | None = None
@@ -73,8 +75,13 @@ async def _publisher_worker(queue: asyncio.Queue[dict[str, Any]]) -> None:
         event = await queue.get()
         try:
             await asyncio.to_thread(_post_event, event)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                "failed to publish import status event run_id=%s status=%s: %s",
+                event.get("run_id"),
+                event.get("status"),
+                exc,
+            )
         finally:
             queue.task_done()
 
