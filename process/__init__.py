@@ -58,6 +58,7 @@ class DrugIndications:
     on_startup = lambda ctx: init_db(db, asyncio.get_event_loop())
     on_shutdown = lambda ctx: db.disconnect()
     queue_name = 'arq:queue:drug-api-import-indications'
+    job_timeout = int(os.environ.get('HLTHPRT_DRUG_INDICATIONS_JOB_TIMEOUT', '86400'))
     redis_settings = redis_settings()
     job_serializer = msgpack.packb
     job_deserializer = lambda b: msgpack.unpackb(b, raw=False)

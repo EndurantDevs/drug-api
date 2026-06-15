@@ -13,6 +13,12 @@ def test_worker_registry_exposes_drug_workers():
     assert by_importer["drug-indications"]["worker_class"] == "process.DrugIndications"
 
 
+def test_drug_indications_worker_has_production_timeout():
+    from process import DrugIndications  # pylint: disable=import-outside-toplevel
+
+    assert DrugIndications.job_timeout == 86400
+
+
 def test_ensure_worker_starts_registered_burst_worker(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
@@ -85,6 +91,31 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     assert {"configMapRef": {"name": "drug-api-config"}} in container["envFrom"]
     assert {"secretRef": {"name": "drug-api-secret"}} in container["envFrom"]
     assert job["spec"]["activeDeadlineSeconds"] == 43200
+
+
+def test_kubernetes_completed_worker_job_is_recreated(monkeypatch):
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_request(method, path, body=None):
+        calls.append((method, path, body))
+        if method == "GET":
+            if any(item[0] == "POST" for item in calls):
+                return {"items": [{"metadata": {"name": "worker-job"}, "status": {"active": 1}}]}
+            return {"items": [{"metadata": {"name": "worker-job"}, "status": {"succeeded": 1}}]}
+        return {}
+
+    monkeypatch.setenv("HLTHPRT_WORKER_LAUNCHER", "kubernetes")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "ghcr.io/endurantdevs/drug-api:dev")
+    monkeypatch.setenv("HLTHPRT_IMPORT_NODE_ID", "local_drug")
+    monkeypatch.setattr(control_workers, "_kubernetes_configured", lambda: True)
+    monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "healthporta-dev")
+    monkeypatch.setattr(control_workers, "_kubernetes_request", fake_request)
+
+    result = control_workers.ensure_worker({"importer": "drug-indications", "run_id": "run_123"})
+
+    assert result["status"] == "started"
+    assert any(call[0] == "DELETE" and call[1].endswith("/jobs/worker-job") for call in calls)
+    assert any(call[0] == "POST" and call[1] == "/apis/batch/v1/namespaces/healthporta-dev/jobs" for call in calls)
 
 
 def test_find_running_pid_ignores_other_node_worker(monkeypatch):
