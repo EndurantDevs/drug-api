@@ -249,11 +249,16 @@ def _worker_job_manifest(spec: WorkerSpec, payload: dict[str, Any], image: str) 
     resources = _worker_job_resources()
     if resources:
         container["resources"] = resources
+    volumes = _worker_job_pvc_volumes()
+    if volumes:
+        container["volumeMounts"] = [item["volumeMount"] for item in volumes]
 
     pod_spec: dict[str, Any] = {
         "restartPolicy": "Never",
         "containers": [container],
     }
+    if volumes:
+        pod_spec["volumes"] = [item["volume"] for item in volumes]
     service_account = os.getenv("HLTHPRT_WORKER_JOB_SERVICE_ACCOUNT", "").strip()
     if service_account:
         pod_spec["serviceAccountName"] = service_account
@@ -331,6 +336,27 @@ def _worker_job_resources() -> dict[str, Any]:
     if limits:
         resources["limits"] = limits
     return resources
+
+
+def _worker_job_pvc_volumes() -> list[dict[str, Any]]:
+    claim_name = os.getenv("HLTHPRT_WORKER_JOB_PVC_NAME", "").strip()
+    mount_path = os.getenv("HLTHPRT_WORKER_JOB_PVC_MOUNT_PATH", "").strip()
+    if not claim_name or not mount_path:
+        return []
+
+    volume_name = os.getenv("HLTHPRT_WORKER_JOB_PVC_VOLUME_NAME", "import-workdir").strip() or "import-workdir"
+    return [
+        {
+            "volume": {
+                "name": volume_name,
+                "persistentVolumeClaim": {"claimName": claim_name},
+            },
+            "volumeMount": {
+                "name": volume_name,
+                "mountPath": mount_path,
+            },
+        }
+    ]
 
 
 def _worker_job_name(spec: WorkerSpec, payload: dict[str, Any]) -> str:
