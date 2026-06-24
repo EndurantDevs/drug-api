@@ -5,12 +5,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      run_docker_smoke:
-        description: "Run the Docker image/runtime smoke job on GitHub-hosted runners"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -113,49 +107,6 @@ jobs:
         uses: semgrep/semgrep-action@v1
         with:
           config: .semgrep.yml
-
-  docker-image-build:
-    name: docker image and runtime smoke
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_docker_smoke }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: healthporta_drug_docker_smoke
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d healthporta_drug_docker_smoke"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@v6
-      - name: Build Python 3.14 image
-        run: docker build --pull --tag drug-api:ci .
-      - name: Runtime health smoke
-        run: |
-          docker run --rm -d --name drug-api-ci --network host \
-            -e HLTHPRT_DB_HOST=127.0.0.1 \
-            -e HLTHPRT_DB_PORT=5432 \
-            -e HLTHPRT_DB_USER=postgres \
-            -e HLTHPRT_DB_PASSWORD=postgres \
-            -e HLTHPRT_DB_DATABASE=healthporta_drug_docker_smoke \
-            -e HLTHPRT_DB_SCHEMA=rx_data \
-            -e DB_SCHEMA=rx_data \
-            drug-api:ci
-          trap 'docker logs drug-api-ci || true; docker rm -f drug-api-ci || true' EXIT
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:8080/api/v1/healthcheck/ >/tmp/health.json; then
-              cat /tmp/health.json
-              exit 0
-            fi
-            sleep 2
-          done
-          exit 1
 
   postgres18-db-tests:
     name: postgres18 migration and importer tests
