@@ -12,6 +12,13 @@ RUN apt-get update \
     && . venv/bin/activate \
     && pip install --no-compile --upgrade pip \
     && pip install --no-compile -r /wheels/requirements-dev.txt -f /wheels \
+    && install -d -o nobody -g nogroup -m 755 /run /var/log/nginx \
+    && install -d -o nobody -g nogroup -m 700 \
+        /var/lib/nginx/body \
+        /var/lib/nginx/proxy \
+        /var/lib/nginx/fastcgi \
+        /var/lib/nginx/uwsgi \
+        /var/lib/nginx/scgi \
     && rm -rf /wheels \
     && rm -rf /root/.cache/pip/* \
     && find . -name '*.pyc' -delete \
@@ -52,6 +59,7 @@ ENV HLTHPRT_DB_SCHEMA=${HLTHPRT_DB_SCHEMA}
 ENV HLTHPRT_REDIS_ADDRESS=${HLTHPRT_REDIS_ADDRESS}
 ENV HLTHPRT_MAIN_RX_JSON_URL=${HLTHPRT_MAIN_RX_JSON_URL}
 ENV HLTHPRT_SAVE_PER_PACK=${HLTHPRT_SAVE_PER_PACK}
+ENV PYTHONDONTWRITEBYTECODE=1
 
 ADD service/nginx.conf /etc/nginx/nginx.conf
 ADD service/start_api.sh /usr/local/bin/start_api.sh
@@ -63,6 +71,8 @@ COPY db/ /opt/db/
 COPY alembic/ /opt/alembic/
 COPY process/ /opt/process/
 COPY logging.yaml main.py alembic.ini /opt/
+
+USER nobody:nogroup
 
 EXPOSE 8080
 CMD ["/usr/local/bin/start_api.sh"]
