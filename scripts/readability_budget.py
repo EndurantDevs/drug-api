@@ -132,6 +132,7 @@ class Issue:
     detail: dict[str, Any]
 
     def to_json(self) -> dict[str, Any]:
+        """Return the stable JSON shape used by baselines and CLI output."""
         payload = {"id": self.identifier, "path": self.path}
         payload.update(self.detail)
         return payload
@@ -149,7 +150,7 @@ def _compile_suppression_patterns(config: dict[str, Any]) -> list[tuple[str, re.
     return patterns
 
 
-def _matches_any(path: str, patterns: Iterable[str]) -> bool:
+def _is_matching_path_pattern(path: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
 
 
@@ -235,7 +236,7 @@ def _is_boolean_or_none_literal(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and (isinstance(node.value, bool) or node.value is None)
 
 
-def _is_collection_expression(node: ast.AST) -> str | None:
+def _collection_expression_kind(node: ast.AST) -> str | None:
     if isinstance(node, (ast.List, ast.ListComp, ast.GeneratorExp)):
         return "list"
     if isinstance(node, (ast.Set, ast.SetComp)):
@@ -293,7 +294,7 @@ def _iter_source_files(repo_root: Path, config: dict[str, Any]) -> list[Path]:
             relative = path.relative_to(repo_root).as_posix()
             if not path.name.endswith(include_suffixes):
                 continue
-            if _matches_any(relative, exclude_globs):
+            if _is_matching_path_pattern(relative, exclude_globs):
                 continue
             files.append(path)
     return sorted(set(files))
@@ -384,15 +385,18 @@ class FunctionVisitor(ast.NodeVisitor):
         self.scope: list[str] = []
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        """Check class-level naming rules before walking nested definitions."""
         self._check_class_name(node)
         self.scope.append(node.name)
         self.generic_visit(node)
         self.scope.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        """Check synchronous functions with the shared function rules."""
         self._visit_function(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        """Check asynchronous functions with the shared function rules."""
         self._visit_function(node)
 
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
@@ -479,6 +483,7 @@ class FunctionVisitor(ast.NodeVisitor):
         qualified_name: str,
         function_lines: int,
     ) -> None:
+        """Report vague names, overlong names, and boolean predicate mismatches."""
         relative = self.path.relative_to(self.repo_root).as_posix()
         name = node.name.strip("_")
         tokens = _split_name_tokens(node.name)
@@ -520,7 +525,7 @@ class FunctionVisitor(ast.NodeVisitor):
                     },
                 )
             )
-        if self._function_returns_bool(node):
+        if self._has_only_boolean_returns(node):
             boolean_prefixes = _name_prefixes(self.config, "boolean_prefixes", DEFAULT_BOOLEAN_PREFIXES)
             if not _has_boolean_prefix(node.name, boolean_prefixes):
                 self.issues.append(
@@ -545,8 +550,8 @@ class FunctionVisitor(ast.NodeVisitor):
     ) -> None:
         relative = self.path.relative_to(self.repo_root).as_posix()
         min_docstring_lines = _threshold(self.config, "min_docstring_function_lines", 60)
-        public_function = not node.name.startswith("_") and not relative.startswith("tests/")
-        if (public_function or function_lines >= min_docstring_lines) and ast.get_docstring(node) is None:
+        is_public_function = not node.name.startswith("_") and not relative.startswith("tests/")
+        if (is_public_function or function_lines >= min_docstring_lines) and ast.get_docstring(node) is None:
             self.issues.append(
                 Issue(
                     "missing_contract_docstrings",
@@ -557,7 +562,7 @@ class FunctionVisitor(ast.NodeVisitor):
                         "line": node.lineno,
                         "lines": function_lines,
                         "limit": min_docstring_lines,
-                        "public": public_function,
+                        "public": is_public_function,
                     },
                 )
             )
@@ -584,6 +589,7 @@ class FunctionVisitor(ast.NodeVisitor):
         qualified_name: str,
         function_lines: int,
     ) -> None:
+        """Report local names that obscure type, scope, or mutable state."""
         relative = self.path.relative_to(self.repo_root).as_posix()
         assigned_names: set[str] = {arg.arg for arg in self._iter_args(node)}
         ambiguous_names = _name_list(
@@ -687,19 +693,19 @@ class FunctionVisitor(ast.NodeVisitor):
         boolean_prefixes: tuple[str, ...],
     ) -> None:
         if isinstance(node, ast.Assign):
-            targets = [name for target in node.targets for name in _target_names(target)]
-            value = node.value
+            assigned_names = [name for assignment_target in node.targets for name in _target_names(assignment_target)]
+            assigned_value = node.value
         elif isinstance(node, ast.AnnAssign):
-            targets = _target_names(node.target)
-            value = node.value
+            assigned_names = _target_names(node.target)
+            assigned_value = node.value
         else:
-            targets = _target_names(node.target)
-            value = node.value
-        if value is None:
+            assigned_names = _target_names(node.target)
+            assigned_value = node.value
+        if assigned_value is None:
             return
-        collection_kind = _is_collection_expression(value)
-        for name in targets:
-            if _is_bool_expression(value) and not _has_boolean_prefix(name, boolean_prefixes):
+        collection_kind = _collection_expression_kind(assigned_value)
+        for name in assigned_names:
+            if _is_bool_expression(assigned_value) and not _has_boolean_prefix(name, boolean_prefixes):
                 self.issues.append(
                     Issue(
                         "boolean_name_mismatch",
@@ -809,7 +815,8 @@ class FunctionVisitor(ast.NodeVisitor):
             )
         )
 
-    def _function_returns_bool(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    def _has_only_boolean_returns(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        """Return true when a function annotation or all returns are boolean."""
         if isinstance(node.returns, ast.Name) and node.returns.id == "bool":
             return True
         returns = [child.value for child in ast.walk(node) if isinstance(child, ast.Return) and child.value is not None]
@@ -870,30 +877,32 @@ def _analyze_file(repo_root: Path, path: Path, config: dict[str, Any]) -> list[I
 
 
 def collect_issues(repo_root: Path, config: dict[str, Any]) -> dict[str, list[Issue]]:
+    """Collect readability findings grouped by rule category."""
     patterns = _compile_suppression_patterns(config)
-    issues: dict[str, list[Issue]] = {category: [] for category in DEFAULT_ISSUE_CATEGORIES}
+    issues_by_category: dict[str, list[Issue]] = {category: [] for category in DEFAULT_ISSUE_CATEGORIES}
     for path in _iter_source_files(repo_root, config):
         for issue in _analyze_file(repo_root, path, config):
-            issues[issue.category].append(issue)
-        issues["inline_suppressions"].extend(_find_inline_suppressions(repo_root, path, patterns))
+            issues_by_category[issue.category].append(issue)
+        issues_by_category["inline_suppressions"].extend(_find_inline_suppressions(repo_root, path, patterns))
         if path.suffix == ".py":
-            issues["comment_noise"].extend(_find_comment_noise(repo_root, path, config))
-    return {category: sorted(values, key=lambda issue: issue.identifier) for category, values in issues.items()}
+            issues_by_category["comment_noise"].extend(_find_comment_noise(repo_root, path, config))
+    return {category: sorted(values, key=lambda issue: issue.identifier) for category, values in issues_by_category.items()}
 
 
 def build_snapshot(repo_root: Path, config: dict[str, Any]) -> dict[str, Any]:
-    issues = collect_issues(repo_root, config)
+    """Build the deterministic readability snapshot used for gating."""
+    issues_by_category = collect_issues(repo_root, config)
     return {
         "version": 1,
         "rules": _rules_snapshot(config),
         "thresholds": config["thresholds"],
         "issues": {
             category: [issue.to_json() for issue in values]
-            for category, values in sorted(issues.items())
+            for category, values in sorted(issues_by_category.items())
         },
         "issue_counts": {
             category: len(values)
-            for category, values in sorted(issues.items())
+            for category, values in sorted(issues_by_category.items())
         },
     }
 
@@ -962,6 +971,7 @@ def _print_new_issues(new_by_category: dict[str, list[dict[str, Any]]]) -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse CLI flags for checking or refreshing readability baselines."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--config", default=DEFAULT_CONFIG)
@@ -971,6 +981,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the readability budget check and return a process exit code."""
     args = parse_args(argv or sys.argv[1:])
     repo_root = args.repo_root.resolve()
     config_path = repo_root / args.config
