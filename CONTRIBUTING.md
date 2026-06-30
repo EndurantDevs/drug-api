@@ -20,6 +20,12 @@ pull request.
 Use `type/short-slug` names: `feature/<slug>`, `fix/<slug>`,
 `docs/<slug>`, `test/<slug>`, or `chore/<slug>`.
 
+## Commit Messages
+
+Use the style in [docs/commit-messages.md](docs/commit-messages.md). Run
+`python3 scripts/check_commit_messages.py --last 1` before pushing
+hand-written commits.
+
 ## Tests
 
 Run the focused tests for the area you changed before opening a pull request.

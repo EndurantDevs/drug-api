@@ -26,6 +26,7 @@ Key pages:
 - [Drug indications DevOps](./docs/devops/drug-indications.md)
 - [Architecture](./docs/architecture.md)
 - [Readability budget](./docs/readability.md)
+- [Commit message style](./docs/commit-messages.md)
 
 ## Source Families
 
