@@ -40,10 +40,12 @@ _K8S_API_NAMESPACE = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespa
 
 
 def worker_registry() -> list[dict[str, Any]]:
+    """Return all worker definitions with their current runtime state."""
     return [_worker_state(spec) for spec in _WORKERS]
 
 
 def ensure_worker(payload: dict[str, Any]) -> dict[str, Any]:
+    """Start the requested worker when it is registered and not already running."""
     spec = _resolve_spec(payload)
     if spec is None:
         importer = str(payload.get("importer") or "").strip()
@@ -83,10 +85,10 @@ def _start_process(spec: WorkerSpec) -> int:
     log_dir = _log_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     log_dir.mkdir(parents=True, exist_ok=True)
-    cmd = [sys.executable, str(_main_path()), "worker", spec.worker_class, "--burst"]
+    command_args = [sys.executable, str(_main_path()), "worker", spec.worker_class, "--burst"]
     with _log_path(spec).open("ab") as log_handle:
         process = subprocess.Popen(
-            cmd,
+            command_args,
             cwd=str(_repo_root()),
             env=os.environ.copy(),
             stdout=log_handle,
@@ -157,16 +159,16 @@ def _ensure_kubernetes_job(
 
 def _delete_kubernetes_job(namespace: str, job_name: str) -> None:
     encoded = urllib.parse.quote(job_name, safe="")
-    body = {
+    delete_options_dict = {
         "apiVersion": "v1",
         "kind": "DeleteOptions",
         "propagationPolicy": "Background",
     }
-    _kubernetes_request("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{encoded}", body)
+    _kubernetes_request("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{encoded}", delete_options_dict)
 
 
-def _kubernetes_worker_state(spec: WorkerSpec, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-    base = {
+def _kubernetes_worker_state(spec: WorkerSpec, worker_request: dict[str, Any] | None = None) -> dict[str, Any]:
+    base_state_dict = {
         "queue": spec.queue,
         "worker_class": spec.worker_class,
         "importers": list(spec.importers),
@@ -177,32 +179,32 @@ def _kubernetes_worker_state(spec: WorkerSpec, payload: dict[str, Any] | None = 
         "command": " ".join([_worker_python(), str(_main_path()), "worker", spec.worker_class, "--burst"]),
     }
     if not _kubernetes_configured():
-        return {**base, "job_name": _worker_job_name(spec, payload or {}), "job_status": "unconfigured"}
+        return {**base_state_dict, "job_name": _worker_job_name(spec, worker_request or {}), "job_status": "unconfigured"}
 
-    labels = {
+    selector_labels_dict = {
         "app.kubernetes.io/managed-by": "healthporta-worker-launcher",
         "healthporta.com/engine": _ENGINE_LABEL,
         "healthporta.com/worker-class-hash": _label_hash(spec.worker_class),
         "healthporta.com/role": spec.role,
     }
-    run_id = str((payload or {}).get("run_id") or "").strip()
+    run_id = str((worker_request or {}).get("run_id") or "").strip()
     if run_id:
-        labels["healthporta.com/run-id-hash"] = _label_hash(run_id)
-    selector = ",".join(f"{key}={value}" for key, value in labels.items())
+        selector_labels_dict["healthporta.com/run-id-hash"] = _label_hash(run_id)
+    selector = ",".join(f"{label_key}={label_value}" for label_key, label_value in selector_labels_dict.items())
     namespace = _kubernetes_namespace()
     path = f"/apis/batch/v1/namespaces/{namespace}/jobs?{urllib.parse.urlencode({'labelSelector': selector})}"
     try:
-        body = _kubernetes_request("GET", path)
+        response_body_dict = _kubernetes_request("GET", path)
     except _KubernetesApiError as exc:
-        return {**base, "job_name": _worker_job_name(spec, payload or {}), "job_status": "error", "message": str(exc)}
+        return {**base_state_dict, "job_name": _worker_job_name(spec, worker_request or {}), "job_status": "error", "message": str(exc)}
 
-    items = body.get("items") if isinstance(body, dict) else []
-    jobs = [item for item in items if isinstance(item, dict)]
+    job_items_list = response_body_dict.get("items") if isinstance(response_body_dict, dict) else []
+    jobs = [job_item for job_item in job_items_list if isinstance(job_item, dict)]
     active = sum(int((job.get("status") or {}).get("active") or 0) for job in jobs)
     succeeded = sum(int((job.get("status") or {}).get("succeeded") or 0) for job in jobs)
     failed = sum(int((job.get("status") or {}).get("failed") or 0) for job in jobs)
     latest = jobs[-1] if jobs else {}
-    latest_name = ((latest.get("metadata") or {}).get("name") if isinstance(latest, dict) else None) or _worker_job_name(spec, payload or {})
+    latest_name = ((latest.get("metadata") or {}).get("name") if isinstance(latest, dict) else None) or _worker_job_name(spec, worker_request or {})
     if active:
         job_status = "active"
     elif failed:
@@ -212,7 +214,7 @@ def _kubernetes_worker_state(spec: WorkerSpec, payload: dict[str, Any] | None = 
     else:
         job_status = "missing"
     return {
-        **base,
+        **base_state_dict,
         "running": active > 0,
         "job_name": latest_name,
         "job_status": job_status,
@@ -223,76 +225,20 @@ def _kubernetes_worker_state(spec: WorkerSpec, payload: dict[str, Any] | None = 
 
 
 def _worker_job_manifest(spec: WorkerSpec, payload: dict[str, Any], image: str) -> dict[str, Any]:
+    """Build the Kubernetes Job manifest for one import worker."""
     job_name = _worker_job_name(spec, payload)
-    env = [
-        {"name": "HLTHPRT_WORKER_LAUNCHER", "value": "process"},
-        {"name": "HLTHPRT_IMPORT_NODE_ID", "value": os.getenv("HLTHPRT_IMPORT_NODE_ID", "")},
-    ]
-    import_id = str(payload.get("import_id") or "").strip()
-    if import_id:
-        env.append({"name": "HLTHPRT_IMPORT_ID_OVERRIDE", "value": import_id})
-
-    container: dict[str, Any] = {
-        "name": "worker",
-        "image": image,
-        "imagePullPolicy": os.getenv("HLTHPRT_WORKER_JOB_IMAGE_PULL_POLICY", "IfNotPresent"),
-        "workingDir": str(_repo_root()),
-        "command": [_worker_python(), str(_main_path()), "worker", spec.worker_class, "--burst"],
-        "env": env,
-        "securityContext": _worker_job_container_security_context(),
-    }
-    env_from = _worker_job_env_from()
-    if env_from:
-        container["envFrom"] = env_from
-    resources = _worker_job_resources()
-    if resources:
-        container["resources"] = resources
-    volumes = _worker_job_pvc_volumes()
-    if volumes:
-        container["volumeMounts"] = [item["volumeMount"] for item in volumes]
-
-    pod_spec: dict[str, Any] = {
-        "restartPolicy": "Never",
-        "automountServiceAccountToken": False,
-        "securityContext": _worker_job_pod_security_context(has_pvc=bool(volumes)),
-        "containers": [container],
-    }
-    if volumes:
-        pod_spec["volumes"] = [item["volume"] for item in volumes]
-    service_account = os.getenv("HLTHPRT_WORKER_JOB_SERVICE_ACCOUNT", "").strip()
-    if service_account:
-        pod_spec["serviceAccountName"] = service_account
-    pull_secret = os.getenv("HLTHPRT_WORKER_JOB_IMAGE_PULL_SECRET", "").strip()
-    if pull_secret:
-        pod_spec["imagePullSecrets"] = [{"name": item} for item in _csv(pull_secret)]
-
-    labels = {
-        "app.kubernetes.io/name": "healthporta-import-worker",
-        "app.kubernetes.io/managed-by": "healthporta-worker-launcher",
-        "healthporta.com/engine": _ENGINE_LABEL,
-        "healthporta.com/worker-class-hash": _label_hash(spec.worker_class),
-        "healthporta.com/role": spec.role,
-    }
     run_id = str(payload.get("run_id") or "").strip()
-    if run_id:
-        labels["healthporta.com/run-id-hash"] = _label_hash(run_id)
-    job_spec: dict[str, Any] = {
-        "backoffLimit": int(os.getenv("HLTHPRT_WORKER_JOB_BACKOFF_LIMIT", "0")),
-        "ttlSecondsAfterFinished": int(os.getenv("HLTHPRT_WORKER_JOB_TTL_SECONDS", "86400")),
-        "template": {
-            "metadata": {"labels": labels},
-            "spec": pod_spec,
-        },
-    }
-    active_deadline_seconds = int(os.getenv("HLTHPRT_WORKER_JOB_ACTIVE_DEADLINE_SECONDS", "0") or "0")
-    if active_deadline_seconds > 0:
-        job_spec["activeDeadlineSeconds"] = active_deadline_seconds
+    volumes_list = _worker_job_pvc_volumes()
+    labels_dict = _worker_job_labels(spec, run_id)
+    container_dict = _worker_job_container(spec, payload, image, volumes_list)
+    pod_spec_dict = _worker_job_pod_spec(container_dict, volumes_list)
+    job_spec_dict = _worker_job_spec(labels_dict, pod_spec_dict)
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {
             "name": job_name,
-            "labels": labels,
+            "labels": labels_dict,
             "annotations": {
                 "healthporta.com/queue": spec.queue,
                 "healthporta.com/worker-class": spec.worker_class,
@@ -300,17 +246,100 @@ def _worker_job_manifest(spec: WorkerSpec, payload: dict[str, Any], image: str) 
                 "healthporta.com/run-id": run_id,
             },
         },
-        "spec": job_spec,
+        "spec": job_spec_dict,
     }
 
 
+def _worker_job_container(
+    spec: WorkerSpec,
+    worker_request: dict[str, Any],
+    image: str,
+    volumes_list: list[dict[str, Any]],
+) -> dict[str, Any]:
+    env_list = [
+        {"name": "HLTHPRT_WORKER_LAUNCHER", "value": "process"},
+        {"name": "HLTHPRT_IMPORT_NODE_ID", "value": os.getenv("HLTHPRT_IMPORT_NODE_ID", "")},
+    ]
+    import_id = str(worker_request.get("import_id") or "").strip()
+    if import_id:
+        env_list.append({"name": "HLTHPRT_IMPORT_ID_OVERRIDE", "value": import_id})
+
+    container_dict: dict[str, Any] = {
+        "name": "worker",
+        "image": image,
+        "imagePullPolicy": os.getenv("HLTHPRT_WORKER_JOB_IMAGE_PULL_POLICY", "IfNotPresent"),
+        "workingDir": str(_repo_root()),
+        "command": [_worker_python(), str(_main_path()), "worker", spec.worker_class, "--burst"],
+        "env": env_list,
+        "securityContext": _worker_job_container_security_context(),
+    }
+    env_sources_list = _worker_job_env_from()
+    if env_sources_list:
+        container_dict["envFrom"] = env_sources_list
+    resources_dict = _worker_job_resources()
+    if resources_dict:
+        container_dict["resources"] = resources_dict
+    if volumes_list:
+        container_dict["volumeMounts"] = [volume_pair_dict["volumeMount"] for volume_pair_dict in volumes_list]
+    return container_dict
+
+
+def _worker_job_pod_spec(
+    container_dict: dict[str, Any],
+    volumes_list: list[dict[str, Any]],
+) -> dict[str, Any]:
+    pod_spec_dict: dict[str, Any] = {
+        "restartPolicy": "Never",
+        "automountServiceAccountToken": False,
+        "securityContext": _worker_job_pod_security_context(has_pvc=bool(volumes_list)),
+        "containers": [container_dict],
+    }
+    if volumes_list:
+        pod_spec_dict["volumes"] = [volume_pair_dict["volume"] for volume_pair_dict in volumes_list]
+    service_account = os.getenv("HLTHPRT_WORKER_JOB_SERVICE_ACCOUNT", "").strip()
+    if service_account:
+        pod_spec_dict["serviceAccountName"] = service_account
+    pull_secret = os.getenv("HLTHPRT_WORKER_JOB_IMAGE_PULL_SECRET", "").strip()
+    if pull_secret:
+        pod_spec_dict["imagePullSecrets"] = [{"name": secret_name} for secret_name in _csv(pull_secret)]
+    return pod_spec_dict
+
+
+def _worker_job_labels(spec: WorkerSpec, run_id: str) -> dict[str, str]:
+    labels_dict = {
+        "app.kubernetes.io/name": "healthporta-import-worker",
+        "app.kubernetes.io/managed-by": "healthporta-worker-launcher",
+        "healthporta.com/engine": _ENGINE_LABEL,
+        "healthporta.com/worker-class-hash": _label_hash(spec.worker_class),
+        "healthporta.com/role": spec.role,
+    }
+    if run_id:
+        labels_dict["healthporta.com/run-id-hash"] = _label_hash(run_id)
+    return labels_dict
+
+
+def _worker_job_spec(labels_dict: dict[str, str], pod_spec_dict: dict[str, Any]) -> dict[str, Any]:
+    job_spec_dict: dict[str, Any] = {
+        "backoffLimit": int(os.getenv("HLTHPRT_WORKER_JOB_BACKOFF_LIMIT", "0")),
+        "ttlSecondsAfterFinished": int(os.getenv("HLTHPRT_WORKER_JOB_TTL_SECONDS", "86400")),
+        "template": {
+            "metadata": {"labels": labels_dict},
+            "spec": pod_spec_dict,
+        },
+    }
+    active_deadline_seconds = int(os.getenv("HLTHPRT_WORKER_JOB_ACTIVE_DEADLINE_SECONDS", "0") or "0")
+    if active_deadline_seconds > 0:
+        job_spec_dict["activeDeadlineSeconds"] = active_deadline_seconds
+    return job_spec_dict
+
+
 def _worker_job_env_from() -> list[dict[str, Any]]:
-    env_from: list[dict[str, Any]] = []
+    env_sources_list: list[dict[str, Any]] = []
     for name in _csv(os.getenv("HLTHPRT_WORKER_JOB_ENV_FROM_CONFIGMAP", "")):
-        env_from.append({"configMapRef": {"name": name}})
+        env_sources_list.append({"configMapRef": {"name": name}})
     for name in _csv(os.getenv("HLTHPRT_WORKER_JOB_ENV_FROM_SECRET", "")):
-        env_from.append({"secretRef": {"name": name}})
-    return env_from
+        env_sources_list.append({"secretRef": {"name": name}})
+    return env_sources_list
 
 
 def _worker_job_container_security_context() -> dict[str, Any]:
@@ -321,20 +350,20 @@ def _worker_job_container_security_context() -> dict[str, Any]:
 
 
 def _worker_job_pod_security_context(*, has_pvc: bool) -> dict[str, Any]:
-    security_context: dict[str, Any] = {
+    security_context_dict: dict[str, Any] = {
         "runAsNonRoot": True,
         "runAsUser": 65534,
         "runAsGroup": 65534,
         "seccompProfile": {"type": "RuntimeDefault"},
     }
     if has_pvc:
-        security_context["fsGroup"] = 65534
-        security_context["fsGroupChangePolicy"] = "OnRootMismatch"
-    return security_context
+        security_context_dict["fsGroup"] = 65534
+        security_context_dict["fsGroupChangePolicy"] = "OnRootMismatch"
+    return security_context_dict
 
 
 def _worker_job_resources() -> dict[str, Any]:
-    requests = {
+    resource_requests_dict = {
         key: value
         for key, value in {
             "cpu": os.getenv("HLTHPRT_WORKER_JOB_CPU_REQUEST", "").strip(),
@@ -342,7 +371,7 @@ def _worker_job_resources() -> dict[str, Any]:
         }.items()
         if value
     }
-    limits = {
+    resource_limits_dict = {
         key: value
         for key, value in {
             "cpu": os.getenv("HLTHPRT_WORKER_JOB_CPU_LIMIT", "").strip(),
@@ -350,12 +379,12 @@ def _worker_job_resources() -> dict[str, Any]:
         }.items()
         if value
     }
-    resources: dict[str, Any] = {}
-    if requests:
-        resources["requests"] = requests
-    if limits:
-        resources["limits"] = limits
-    return resources
+    resources_dict: dict[str, Any] = {}
+    if resource_requests_dict:
+        resources_dict["requests"] = resource_requests_dict
+    if resource_limits_dict:
+        resources_dict["limits"] = resource_limits_dict
+    return resources_dict
 
 
 def _worker_job_pvc_volumes() -> list[dict[str, Any]]:
@@ -401,8 +430,11 @@ def _kubernetes_namespace() -> str:
         return "default"
 
 
-def _kubernetes_configured() -> bool:
+def _is_kubernetes_configured() -> bool:
     return bool(os.getenv("KUBERNETES_SERVICE_HOST")) and _K8S_API_TOKEN.exists()
+
+
+_kubernetes_configured = _is_kubernetes_configured
 
 
 class _KubernetesApiError(RuntimeError):
@@ -420,10 +452,10 @@ def _kubernetes_request(method: str, path: str, body: dict[str, Any] | None = No
         token = _K8S_API_TOKEN.read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise _KubernetesApiError(0, f"cannot read Kubernetes service account token: {exc}") from exc
-    data = None if body is None else json.dumps(body).encode("utf-8")
+    request_body_bytes = None if body is None else json.dumps(body).encode("utf-8")
     request = urllib.request.Request(
         f"https://{host}:{port}{path}",
-        data=data,
+        data=request_body_bytes,
         method=method,
         headers={
             "Authorization": f"Bearer {token}",
@@ -467,7 +499,7 @@ def _read_pid(path: Path) -> int | None:
         return None
 
 
-def _pid_running(pid: int | None) -> bool:
+def _is_pid_running(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
     try:
@@ -479,7 +511,10 @@ def _pid_running(pid: int | None) -> bool:
     return True
 
 
-def _pid_matches_current_node(pid: int | None) -> bool:
+_pid_running = _is_pid_running
+
+
+def _is_pid_on_current_node(pid: int | None) -> bool:
     if not pid:
         return False
     try:
@@ -490,6 +525,9 @@ def _pid_matches_current_node(pid: int | None) -> bool:
         except Exception:
             return True
     return _matches_current_node(output)
+
+
+_pid_matches_current_node = _is_pid_on_current_node
 
 
 def _find_running_pid(spec: WorkerSpec) -> int | None:
@@ -515,7 +553,7 @@ def _find_running_pid(spec: WorkerSpec) -> int | None:
     return None
 
 
-def _matches_current_node(process_text: str) -> bool:
+def _is_process_on_current_node(process_text: str) -> bool:
     node_id = os.getenv("HLTHPRT_IMPORT_NODE_ID", "").strip()
     if not node_id:
         return True
@@ -523,6 +561,9 @@ def _matches_current_node(process_text: str) -> bool:
     if key not in process_text:
         return True
     return f"{key}{node_id}" in process_text
+
+
+_matches_current_node = _is_process_on_current_node
 
 
 def _cache_discovered_pid(spec: WorkerSpec, pid: int) -> None:
