@@ -110,13 +110,13 @@ async def label_product_ndc_obj(request, product_ndc):
 @blueprint.get('/list-product/all/<page:int>/<results_per_page:int>', name='list_product_all_with_page_and_results_per_page')
 async def list_product_all(request, letter='a', page=0, results_per_page = 49999, prefix='', separator='', suffix=''):
     """Return a paginated list of product NDC display names."""
-    for (key, value) in request.query_args:
-        if key == 'prefix' and value:
-            prefix = value
-        elif key == 'separator' and value:
-            separator = value
-        elif key == 'suffix' and value:
-            suffix = value
+    for (query_key, query_value) in request.query_args:
+        if query_key == 'prefix' and query_value:
+            prefix = query_value
+        elif query_key == 'separator' and query_value:
+            separator = query_value
+        elif query_key == 'suffix' and query_value:
+            suffix = query_value
     if not letter or len(letter) > 1:
         raise sanic.exceptions.NotFound
     if not page or page<0:

@@ -47,7 +47,11 @@ def live_progress_key(run_id: str) -> str:
 
 def set_live_progress_context(**progress_fields: Any) -> contextvars.Token:
     """Set default live-progress fields for the current async context."""
-    context_fields_dict = {key: value for key, value in progress_fields.items() if value not in (None, "")}
+    context_fields_dict = {
+        field_key: field_value
+        for field_key, field_value in progress_fields.items()
+        if field_value not in (None, "")
+    }
     return _context.set(context_fields_dict)
 
 
@@ -69,16 +73,7 @@ def write_live_progress(**progress_fields: Any) -> None:
         return
 
     now = _utc_now()
-    progress_record_dict = {
-        "run_id": run_id,
-        "importer": progress_fields.get("importer") or context.get("importer") or "unknown",
-        "status": progress_fields.get("status") or context.get("status") or "running",
-        "source": progress_fields.get("source") or context.get("source") or "import-live-progress",
-        "confidence": progress_fields.get("confidence") or context.get("confidence") or "live",
-        "updated_at": now.isoformat() + "Z",
-        **{key: value for key, value in context.items() if key != "run_id"},
-        **{key: value for key, value in progress_fields.items() if value is not None},
-    }
+    progress_record_dict = _progress_record_from_fields(run_id, context, progress_fields, now)
     publish_event = bool(progress_record_dict.pop("publish_event", True))
     if _should_merge_previous(progress_record_dict):
         previous = _read_live_progress_payload(run_id)
@@ -120,6 +115,28 @@ def write_live_progress(**progress_fields: Any) -> None:
         )
     except Exception:
         return
+
+
+def _progress_record_from_fields(
+    run_id: str,
+    context: dict[str, Any],
+    progress_fields: dict[str, Any],
+    now: dt.datetime,
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "importer": progress_fields.get("importer") or context.get("importer") or "unknown",
+        "status": progress_fields.get("status") or context.get("status") or "running",
+        "source": progress_fields.get("source") or context.get("source") or "import-live-progress",
+        "confidence": progress_fields.get("confidence") or context.get("confidence") or "live",
+        "updated_at": now.isoformat() + "Z",
+        **{context_key: context_value for context_key, context_value in context.items() if context_key != "run_id"},
+        **{
+            field_key: field_value
+            for field_key, field_value in progress_fields.items()
+            if field_value is not None
+        },
+    }
 
 
 def enqueue_live_progress(**progress_fields: Any) -> None:
@@ -178,7 +195,7 @@ def progress_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
         "phase": live.get("phase"),
         "updated_at": live.get("updated_at"),
     }
-    return {key: value for key, value in progress_payload_dict.items() if value is not None}
+    return {field_key: field_value for field_key, field_value in progress_payload_dict.items() if field_value is not None}
 
 
 def estimate_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
@@ -190,7 +207,7 @@ def estimate_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
         "source": live.get("source") or "import-live-progress",
         "updated_at": live.get("updated_at"),
     }
-    return {key: value for key, value in estimate_payload_dict.items() if value is not None}
+    return {field_key: field_value for field_key, field_value in estimate_payload_dict.items() if field_value is not None}
 
 
 def _redis() -> redis.Redis:
