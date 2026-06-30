@@ -25,42 +25,52 @@ from sqlalchemy.sql.dml import Delete, Insert, Update
 
 
 class QueryDescriptor:
-    def __get__(self, _instance: Any, owner: type["Base"]):
+    def __get__(self, _instance: Any, owner: type["ModelBase"]):
         return db.select(owner)
 
 
-class Base(DeclarativeBase):
+class ModelBase(DeclarativeBase):
+    """Declarative model base with db shortcut helpers."""
+
     __abstract__ = True
 
     query = QueryDescriptor()
 
     @classmethod
     def insert(cls):
+        """Build an insert statement for this model."""
         return db.insert(cls)
 
     @classmethod
     def select(cls, *columns: Any):
+        """Build a select statement for this model or selected columns."""
         if not columns:
             return db.select(cls)
-        resolved = tuple(getattr(cls, column) if isinstance(column, str) else column for column in columns)
-        return db.select(*resolved)
+        resolved_columns = tuple(getattr(cls, column) if isinstance(column, str) else column for column in columns)
+        return db.select(*resolved_columns)
 
     @classmethod
     def load(cls, *_columns: Any):
+        """Build a select statement for this whole model."""
         return db.select(cls)
 
     @classmethod
     async def get(cls, *identity: Any):
+        """Load one row by primary-key identity."""
         key = identity[0] if len(identity) == 1 else tuple(identity)
         async with db.session() as session:
             return await session.get(cls, key)
 
     @classmethod
     async def get_or_404(cls, *identity: Any):
+        """Load one row by identity or raise Sanic NotFound."""
         row = await cls.get(*identity)
         if row is None:
             raise NotFound(f"{cls.__name__} is not found")
         return row
+
+
+Base = ModelBase
 
 
 def _coerce_columns(columns: Tuple[Any, ...]) -> Tuple[Any, ...]:
