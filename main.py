@@ -68,14 +68,14 @@ def start(host, port, workers, debug, accesslog):
 
 @click.group()
 def server():
-    pass
+    """Group commands that run the HTTP server."""
 
 
 server.add_command(start)
 
 @click.group()
 def cli():
-    pass
+    """Root command group for API, worker, and database commands."""
 
 
 cli.add_command(server)

@@ -31,7 +31,6 @@ LABEL_QUEUE_NAME = (
 
 
 async def download_label_content(ctx, task):
-    # pylint: disable=too-many-locals
     redis = ctx['redis']
     max_records = int(task.get('max_records') or 0)
     run_id = task.get('run_id') or ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')

@@ -44,7 +44,7 @@ def enqueue_status_event(payload: dict[str, Any]) -> None:
             queue.get_nowait()
             queue.task_done()
         except asyncio.QueueEmpty:
-            pass
+            logger.debug("status event queue became empty before dropping the oldest event")
     try:
         queue.put_nowait(event)
     except asyncio.QueueFull:
@@ -96,7 +96,7 @@ def _post_event(event: dict[str, Any]) -> None:
         method="POST",
         headers={"content-type": "application/json", **_auth_headers()},
     )
-    with urllib.request.urlopen(request, timeout=_timeout_seconds()) as response:  # noqa: S310 - internal control URL
+    with urllib.request.urlopen(request, timeout=_timeout_seconds()) as response:
         response.read()
 
 

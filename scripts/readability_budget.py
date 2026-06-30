@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-
 DEFAULT_CONFIG = "readability-budget.json"
 DEFAULT_BASELINE = "readability-baseline.json"
 DEFAULT_AMBIGUOUS_FUNCTION_NAMES = {
@@ -208,6 +207,10 @@ def _is_bool_expression(node: ast.AST) -> bool:
         if isinstance(node.func, ast.Name):
             return _has_boolean_prefix(node.func.id, DEFAULT_BOOLEAN_PREFIXES)
     return False
+
+
+def _is_boolean_or_none_literal(node: ast.AST) -> bool:
+    return isinstance(node, ast.Constant) and (isinstance(node.value, bool) or node.value is None)
 
 
 def _is_collection_expression(node: ast.AST) -> str | None:
@@ -734,7 +737,7 @@ class FunctionVisitor(ast.NodeVisitor):
         node: ast.Compare,
     ) -> None:
         values = [node.left, *node.comparators]
-        if not any(isinstance(value, ast.Constant) and value.value in {True, False, None} for value in values):
+        if not any(_is_boolean_or_none_literal(value) for value in values):
             return
         if not any(isinstance(operator, (ast.Eq, ast.NotEq)) for operator in node.ops):
             return

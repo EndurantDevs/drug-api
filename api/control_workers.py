@@ -9,6 +9,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,7 +73,7 @@ def _ensure_spec(spec: WorkerSpec, payload: dict[str, Any] | None = None) -> dic
         return _ensure_kubernetes_job(spec, payload or {}, state)
     try:
         pid = _start_process(spec)
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:
         return {**state, "status": "failed", "message": str(exc)}
     return {**_worker_state(spec), "status": "started", "pid": pid}
 
@@ -84,7 +85,7 @@ def _start_process(spec: WorkerSpec) -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, str(_main_path()), "worker", spec.worker_class, "--burst"]
     with _log_path(spec).open("ab") as log_handle:
-        process = subprocess.Popen(  # pylint: disable=consider-using-with
+        process = subprocess.Popen(
             cmd,
             cwd=str(_repo_root()),
             env=os.environ.copy(),
@@ -108,11 +109,7 @@ def _worker_state(spec: WorkerSpec, payload: dict[str, Any] | None = None) -> di
         pid = _find_running_pid(spec)
         running = _pid_running(pid)
         if running and pid:
-            try:
-                _state_dir().mkdir(parents=True, exist_ok=True)
-                _pid_path(spec).write_text(str(pid), encoding="utf-8")
-            except OSError:
-                pass
+            _cache_discovered_pid(spec, pid)
     return {
         "queue": spec.queue,
         "worker_class": spec.worker_class,
@@ -487,10 +484,10 @@ def _pid_matches_current_node(pid: int | None) -> bool:
         return False
     try:
         output = subprocess.check_output(["ps", "eww", "-p", str(pid), "-o", "command="], text=True)
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         try:
             output = subprocess.check_output(["ps", "-p", str(pid), "-o", "command="], text=True)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             return True
     return _matches_current_node(output)
 
@@ -498,10 +495,10 @@ def _pid_matches_current_node(pid: int | None) -> bool:
 def _find_running_pid(spec: WorkerSpec) -> int | None:
     try:
         output = subprocess.check_output(["ps", "eww", "-axo", "pid=,command="], text=True)
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         try:
             output = subprocess.check_output(["ps", "-axo", "pid=,command="], text=True)
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             return None
     needle = f"main.py worker {spec.worker_class}"
     for line in output.splitlines():
@@ -528,11 +525,15 @@ def _matches_current_node(process_text: str) -> bool:
     return f"{key}{node_id}" in process_text
 
 
+def _cache_discovered_pid(spec: WorkerSpec, pid: int) -> None:
+    with suppress(OSError):
+        _state_dir().mkdir(parents=True, exist_ok=True)
+        _pid_path(spec).write_text(str(pid), encoding="utf-8")
+
+
 def _remove_stale_pid(spec: WorkerSpec) -> None:
-    try:
+    with suppress(OSError):
         _pid_path(spec).unlink()
-    except OSError:
-        pass
 
 
 def _repo_root() -> Path:

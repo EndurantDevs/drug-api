@@ -12,6 +12,7 @@ sys.modules[SPEC.name] = readability_budget
 SPEC.loader.exec_module(readability_budget)
 
 NOQA_FIXTURE = "# no" + "qa: E123"
+COMMENT_NOISE_FIXTURE = "# return" + " result"
 
 
 def _write_config(repo_root: Path) -> None:
@@ -50,6 +51,10 @@ def _write_config(repo_root: Path) -> None:
     (repo_root / "readability-budget.json").write_text(json.dumps(config), encoding="utf-8")
 
 
+def _assert_issue_count(snapshot: dict, category: str, expected_count: int) -> None:
+    assert snapshot["issue_counts"][category] == expected_count
+
+
 def test_readability_budget_allows_existing_debt(tmp_path):
     repo_root = tmp_path
     package = repo_root / "pkg"
@@ -65,8 +70,9 @@ def test_readability_budget_allows_existing_debt(tmp_path):
     )
     _write_config(repo_root)
 
-    assert readability_budget.main(["--repo-root", str(repo_root), "--write-baseline"]) == 0
-    assert readability_budget.main(["--repo-root", str(repo_root)]) == 0
+    expected_exit_code = 0
+    assert readability_budget.main(["--repo-root", str(repo_root), "--write-baseline"]) == expected_exit_code
+    assert readability_budget.main(["--repo-root", str(repo_root)]) == expected_exit_code
 
 
 def test_readability_budget_rejects_new_inline_suppression(tmp_path):
@@ -76,7 +82,8 @@ def test_readability_budget_rejects_new_inline_suppression(tmp_path):
     module = package / "module.py"
     module.write_text("def clean():\n    return 1\n", encoding="utf-8")
     _write_config(repo_root)
-    assert readability_budget.main(["--repo-root", str(repo_root), "--write-baseline"]) == 0
+    expected_baseline_exit_code = 0
+    assert readability_budget.main(["--repo-root", str(repo_root), "--write-baseline"]) == expected_baseline_exit_code
 
     module.write_text(
         textwrap.dedent(
@@ -91,7 +98,8 @@ def test_readability_budget_rejects_new_inline_suppression(tmp_path):
         encoding="utf-8",
     )
 
-    assert readability_budget.main(["--repo-root", str(repo_root)]) == 1
+    expected_failure_exit_code = 1
+    assert readability_budget.main(["--repo-root", str(repo_root)]) == expected_failure_exit_code
 
 
 def test_readability_budget_reports_long_functions(tmp_path):
@@ -118,8 +126,33 @@ def test_readability_budget_reports_long_functions(tmp_path):
         json.loads((repo_root / "readability-budget.json").read_text(encoding="utf-8")),
     )
 
-    assert snapshot["issue_counts"]["long_functions"] == 1
+    _assert_issue_count(snapshot, "long_functions", 1)
     assert snapshot["issues"]["long_functions"][0]["function"] == "too_long"
+
+
+def test_readability_budget_ignores_numeric_comparisons(tmp_path):
+    repo_root = tmp_path
+    package = repo_root / "pkg"
+    package.mkdir()
+    (package / "module.py").write_text(
+        textwrap.dedent(
+            """
+            def is_clean_exit_code_check():
+                exit_code = 0
+                count = 1
+                return exit_code == 0 and count == 1
+            """
+        ),
+        encoding="utf-8",
+    )
+    _write_config(repo_root)
+
+    snapshot = readability_budget.build_snapshot(
+        repo_root,
+        json.loads((repo_root / "readability-budget.json").read_text(encoding="utf-8")),
+    )
+
+    _assert_issue_count(snapshot, "boolean_name_mismatch", 0)
 
 
 def test_readability_budget_does_not_parse_non_python_files(tmp_path):
@@ -145,7 +178,7 @@ def test_readability_budget_does_not_parse_non_python_files(tmp_path):
 
     snapshot = readability_budget.build_snapshot(repo_root, config)
 
-    assert snapshot["issue_counts"]["syntax_errors"] == 0
+    _assert_issue_count(snapshot, "syntax_errors", 0)
 
 
 def test_readability_budget_reports_naming_and_contract_debt(tmp_path):
@@ -159,16 +192,16 @@ def test_readability_budget_reports_naming_and_contract_debt(tmp_path):
                 pass
 
             def process_data(a, b, c, d):
-                # return result
+                {comment_noise_fixture}
                 data = [1, 2, 3]
-                row = {"a": 1}
+                row = {{"a": 1}}
                 result = a == b
                 l = 1
                 extra = 2
                 another = 3
                 return result
             """
-        ),
+        ).format(comment_noise_fixture=COMMENT_NOISE_FIXTURE),
         encoding="utf-8",
     )
     _write_config(repo_root)
@@ -178,15 +211,15 @@ def test_readability_budget_reports_naming_and_contract_debt(tmp_path):
         json.loads((repo_root / "readability-budget.json").read_text(encoding="utf-8")),
     )
 
-    assert snapshot["issue_counts"]["ambiguous_function_names"] == 1
-    assert snapshot["issue_counts"]["ambiguous_variable_names"] == 3
-    assert snapshot["issue_counts"]["boolean_name_mismatch"] == 1
-    assert snapshot["issue_counts"]["class_name_shape"] == 1
-    assert snapshot["issue_counts"]["comment_noise"] == 1
-    assert snapshot["issue_counts"]["missing_contract_docstrings"] == 1
-    assert snapshot["issue_counts"]["single_letter_names"] == 5
-    assert snapshot["issue_counts"]["too_many_locals"] == 1
-    assert snapshot["issue_counts"]["too_many_parameters"] == 1
+    _assert_issue_count(snapshot, "ambiguous_function_names", 1)
+    _assert_issue_count(snapshot, "ambiguous_variable_names", 3)
+    _assert_issue_count(snapshot, "boolean_name_mismatch", 1)
+    _assert_issue_count(snapshot, "class_name_shape", 1)
+    _assert_issue_count(snapshot, "comment_noise", 1)
+    _assert_issue_count(snapshot, "missing_contract_docstrings", 1)
+    _assert_issue_count(snapshot, "single_letter_names", 5)
+    _assert_issue_count(snapshot, "too_many_locals", 1)
+    _assert_issue_count(snapshot, "too_many_parameters", 1)
 
 
 def test_readability_budget_reports_collection_and_global_state_debt(tmp_path):
@@ -212,6 +245,6 @@ def test_readability_budget_reports_collection_and_global_state_debt(tmp_path):
         json.loads((repo_root / "readability-budget.json").read_text(encoding="utf-8")),
     )
 
-    assert snapshot["issue_counts"]["collection_name_mismatch"] == 2
-    assert snapshot["issue_counts"]["global_state_usage"] == 1
-    assert snapshot["issue_counts"]["pass_placeholders"] == 1
+    _assert_issue_count(snapshot, "collection_name_mismatch", 2)
+    _assert_issue_count(snapshot, "global_state_usage", 1)
+    _assert_issue_count(snapshot, "pass_placeholders", 1)

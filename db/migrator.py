@@ -15,7 +15,7 @@ ALEMBIC_INI = BASE_DIR / 'alembic.ini'
 
 @click.group()
 def db_group():
-    pass
+    """Group database migration commands."""
 
 
 @click.command(help="Downgrade to revision")

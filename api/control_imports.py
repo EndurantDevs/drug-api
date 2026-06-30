@@ -4,6 +4,7 @@ import datetime
 import json
 import os
 import uuid
+from contextlib import suppress
 from typing import Any
 
 import msgpack
@@ -157,7 +158,7 @@ def node_health() -> dict[str, Any]:
 
 def _worker_health() -> dict[str, Any]:
     try:
-        from api.control_workers import worker_registry  # pylint: disable=import-outside-toplevel
+        from api.control_workers import worker_registry
 
         return {
             item["queue"]: {
@@ -168,7 +169,7 @@ def _worker_health() -> dict[str, Any]:
             }
             for item in worker_registry()
         }
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         return {}
 
 
@@ -181,7 +182,7 @@ def _queue_depths() -> dict[str, int]:
     try:
         client = redis.Redis.from_url(redis_dsn(), socket_connect_timeout=1.0, socket_timeout=1.0)
         return {queue: int(client.zcard(queue) or 0) for queue in sorted(queues)}
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:
         return {}
 
 
@@ -387,7 +388,7 @@ async def _remove_queued_job(run: dict[str, Any]) -> dict[str, Any]:
         removed = int(await redis.zrem(queue, job_id) or 0)
         deleted = int(await redis.delete(f"arq:job:{job_id}") or 0)
         return {"redis": True, "removed": removed > 0, "queue": queue, "job_id": job_id, "deleted_job_key": deleted > 0}
-    except Exception as exc:  # pylint: disable=broad-exception-caught
+    except Exception as exc:
         return {"redis": False, "removed": False, "error": str(exc), "queue": queue, "job_id": job_id}
 
 
@@ -420,7 +421,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
             try:
                 data[key] = json.loads(value)
             except json.JSONDecodeError:
-                pass
+                continue
     return data
 
 

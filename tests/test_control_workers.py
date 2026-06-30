@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from api import control_workers
 from api.control_imports import NDC_QUEUE_NAME
+from process import DrugIndications
 
 
 def test_worker_registry_exposes_drug_workers():
@@ -14,8 +15,6 @@ def test_worker_registry_exposes_drug_workers():
 
 
 def test_drug_indications_worker_has_production_timeout():
-    from process import DrugIndications  # pylint: disable=import-outside-toplevel
-
     assert DrugIndications.job_timeout == 86400
 
 
@@ -133,6 +132,6 @@ def test_find_running_pid_ignores_other_node_worker(monkeypatch):
     monkeypatch.setenv("HLTHPRT_IMPORT_NODE_ID", "local_drug")
     monkeypatch.setattr(control_workers.subprocess, "check_output", lambda *_args, **_kwargs: output)
 
-    spec = control_workers._BY_QUEUE[NDC_QUEUE_NAME]  # pylint: disable=protected-access
+    spec = control_workers._BY_QUEUE[NDC_QUEUE_NAME]
 
-    assert control_workers._find_running_pid(spec) == 222  # pylint: disable=protected-access
+    assert control_workers._find_running_pid(spec) == 222

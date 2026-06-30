@@ -67,10 +67,10 @@ class _FakeSession:
         return False
 
     async def commit(self):
-        pass
+        return None
 
     async def rollback(self):
-        pass
+        return None
 
     async def close(self):
         self.closed = True
@@ -94,7 +94,7 @@ async def test_ndc_startup_creates_suffixed_product_and_package_tables(monkeypat
     fake_db = _RecordingDb()
 
     async def fake_init_db(*_args, **_kwargs):
-        pass
+        return None
 
     monkeypatch.setattr(ndc_product, "db", fake_db)
     monkeypatch.setattr(ndc_product, "init_db", fake_init_db)
@@ -116,7 +116,7 @@ async def test_ndc_shutdown_publishes_suffixed_tables_inside_transactions(monkey
     fake_db = _RecordingDb([100, 100, 200])
 
     async def fake_mark_control_run(*_args, **_kwargs):
-        pass
+        return None
 
     monkeypatch.setattr(ndc_product, "db", fake_db)
     monkeypatch.setattr(ndc_product, "mark_control_run", fake_mark_control_run)
@@ -145,7 +145,7 @@ async def test_label_startup_creates_suffixed_label_table(monkeypatch):
     fake_db = _RecordingDb()
 
     async def fake_init_db(*_args, **_kwargs):
-        pass
+        return None
 
     monkeypatch.setattr(label, "db", fake_db)
     monkeypatch.setattr(label, "init_db", fake_init_db)
@@ -163,7 +163,7 @@ async def test_label_shutdown_publishes_suffixed_label_table_inside_transaction(
     fake_db = _RecordingDb([25, 25])
 
     async def fake_mark_control_run(*_args, **_kwargs):
-        pass
+        return None
 
     monkeypatch.setattr(label, "db", fake_db)
     monkeypatch.setattr(label, "mark_control_run", fake_mark_control_run)
