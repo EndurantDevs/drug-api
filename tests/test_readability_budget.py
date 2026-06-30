@@ -155,6 +155,30 @@ def test_readability_budget_ignores_numeric_comparisons(tmp_path):
     _assert_issue_count(snapshot, "boolean_name_mismatch", 0)
 
 
+def test_readability_budget_ignores_fallback_assignments(tmp_path):
+    repo_root = tmp_path
+    package = repo_root / "pkg"
+    package.mkdir()
+    (package / "module.py").write_text(
+        textwrap.dedent(
+            """
+            def display_label(primary, fallback):
+                label = primary or fallback or ""
+                return label
+            """
+        ),
+        encoding="utf-8",
+    )
+    _write_config(repo_root)
+
+    snapshot = readability_budget.build_snapshot(
+        repo_root,
+        json.loads((repo_root / "readability-budget.json").read_text(encoding="utf-8")),
+    )
+
+    _assert_issue_count(snapshot, "boolean_name_mismatch", 0)
+
+
 def test_readability_budget_does_not_parse_non_python_files(tmp_path):
     repo_root = tmp_path
     package = repo_root / "pkg"

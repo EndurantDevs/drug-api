@@ -197,8 +197,10 @@ def _has_boolean_prefix(name: str, prefixes: Iterable[str]) -> bool:
 def _is_bool_expression(node: ast.AST) -> bool:
     if isinstance(node, ast.Constant) and isinstance(node.value, bool):
         return True
-    if isinstance(node, (ast.Compare, ast.BoolOp)):
+    if isinstance(node, ast.Compare):
         return True
+    if isinstance(node, ast.BoolOp):
+        return all(_is_bool_expression(value) for value in node.values)
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return True
     if isinstance(node, ast.Call):
