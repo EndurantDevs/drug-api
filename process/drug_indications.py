@@ -70,9 +70,9 @@ def _hash_id(*parts):
 
 
 def _label_ndcs(label):
-    product_ndc = list(getattr(label, 'product_ndc', None) or [])
-    package_ndc = list(getattr(label, 'package_ndc', None) or [])
-    return product_ndc, package_ndc
+    product_ndcs = list(getattr(label, 'product_ndc', None) or [])
+    package_ndcs = list(getattr(label, 'package_ndc', None) or [])
+    return product_ndcs, package_ndcs
 
 
 def _rxnorm_ids_for_label(product_ndc, rxnorm_by_product):
@@ -86,7 +86,7 @@ def _normalize_term(term):
     return re.sub(r'\s+', ' ', str(term or '').strip().lower())
 
 
-def _term_matches(text_lower, term):
+def _is_term_match(text_lower, term):
     normalized = _normalize_term(term)
     if len(normalized) < 4:
         return False
@@ -135,8 +135,8 @@ async def _fetch_clinical_rows(test_mode=False):
         finally:
             await connection.close()
     except Exception as exc:
-        allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
-        if test_mode or allow_empty:
+        should_allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
+        if test_mode or should_allow_empty:
             print(f"Clinical terminology lookup skipped: {exc}")
             return [], []
         raise RuntimeError(f"Clinical terminology lookup failed: {exc}") from exc
@@ -174,12 +174,12 @@ def _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
     product_ndc, package_ndc = _label_ndcs(label)
     rxnorm_ids = _rxnorm_ids_for_label(product_ndc, rxnorm_by_product)
     now = datetime.datetime.utcnow()
-    emitted = set()
+    emitted_keys_set = set()
     for rxcui in rxnorm_ids:
-        for item in relationships_by_rxnorm.get(str(rxcui), []):
-            base_key = (rxcui, item['condition_system'], item['condition_code'])
-            if base_key not in emitted:
-                emitted.add(base_key)
+        for condition_context in relationships_by_rxnorm.get(str(rxcui), []):
+            base_key = (rxcui, condition_context['condition_system'], condition_context['condition_code'])
+            if base_key not in emitted_keys_set:
+                emitted_keys_set.add(base_key)
                 evidence_id = _hash_id(getattr(label, 'set_id', None), getattr(label, 'id', None), *base_key)
                 yield {
                     'evidence_id': evidence_id,
@@ -188,22 +188,22 @@ def _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
                     'product_ndc': product_ndc,
                     'package_ndc': package_ndc,
                     'rxnorm_ids': rxnorm_ids,
-                    'condition_system': item['condition_system'],
-                    'condition_code': item['condition_code'],
-                    'evidence_text': f"RxNorm {rxcui} {item['relationship']} {item['condition_system']}:{item['condition_code']} via clinical terminology relationship.",
+                    'condition_system': condition_context['condition_system'],
+                    'condition_code': condition_context['condition_code'],
+                    'evidence_text': f"RxNorm {rxcui} {condition_context['relationship']} {condition_context['condition_system']}:{condition_context['condition_code']} via clinical terminology relationship.",
                     'evidence_source': 'clinical_rxnorm_relationship',
                     'confidence': 0.85,
-                    'source_attribution': item['source_attribution'],
+                    'source_attribution': condition_context['source_attribution'],
                     'imported_at': now,
                 }
-            for term in item['terms']:
+            for term in condition_context['terms']:
                 matched_term = term['term']
-                if not _term_matches(text_lower, matched_term):
+                if not _is_term_match(text_lower, matched_term):
                     continue
                 term_key = (*base_key, matched_term)
-                if term_key in emitted:
+                if term_key in emitted_keys_set:
                     continue
-                emitted.add(term_key)
+                emitted_keys_set.add(term_key)
                 evidence_id = _hash_id(getattr(label, 'set_id', None), getattr(label, 'id', None), *term_key)
                 yield {
                     'evidence_id': evidence_id,
@@ -212,12 +212,12 @@ def _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
                     'product_ndc': product_ndc,
                     'package_ndc': package_ndc,
                     'rxnorm_ids': rxnorm_ids,
-                    'condition_system': item['condition_system'],
-                    'condition_code': item['condition_code'],
+                    'condition_system': condition_context['condition_system'],
+                    'condition_code': condition_context['condition_code'],
                     'evidence_text': _text_excerpt(text, matched_term),
                     'evidence_source': 'clinical_synonym_label_match',
                     'confidence': 0.9 if term['term_type'] == 'preferred' else 0.8,
-                    'source_attribution': item['source_attribution'],
+                    'source_attribution': condition_context['source_attribution'],
                     'imported_at': now,
                 }
 
@@ -262,6 +262,7 @@ async def _publish(schema, import_date):
 
 
 async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
+    """Build and optionally publish drug-condition evidence from labels."""
     start = datetime.datetime.now()
     import_date = _import_date(import_id)
     schema = _schema()
@@ -280,69 +281,103 @@ async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
     await db.status(f"DROP TABLE IF EXISTS {schema}.{evidence_cls.__tablename__};")
     await db.create_table(evidence_cls.__table__)
 
-    rxnorm_by_product = {}
-    async with db.transaction():
-        async for product in Product.query.iterate():
-            if getattr(product, 'product_ndc', None):
-                rxnorm_by_product[product.product_ndc] = list(getattr(product, 'rxnorm_ids', None) or [])
+    rxnorm_ids_by_product = await _rxnorm_ids_by_product()
     relationships_by_rxnorm = await _load_official_condition_context(test_mode=test_mode)
 
-    evidence_batch = []
-    scanned = 0
-    matched = 0
-    async with db.transaction():
-        async for label in Label.query.iterate():
-            scanned += 1
-            for row in _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
-                evidence_batch.append(row)
-                matched += 1
-            if len(evidence_batch) >= batch_size:
-                await push_objects(evidence_batch, evidence_cls)
-                evidence_batch = []
-                enqueue_live_progress(
-                    run_id=run_id,
-                    importer="drug-indications",
-                    status="running",
-                    phase="drug indications scanning labels",
-                    unit="labels",
-                    done=scanned,
-                    total=test_limit if test_mode else None,
-                    message=f"scanned {scanned} labels; matched {matched}",
-                )
-            if test_mode and scanned >= test_limit:
-                break
-
-    await push_objects(evidence_batch, evidence_cls)
+    scanned, matched = await _scan_condition_evidence(
+        evidence_cls,
+        rxnorm_ids_by_product,
+        relationships_by_rxnorm,
+        batch_size,
+        test_limit,
+        test_mode,
+        run_id,
+    )
     await _create_indexes(schema, evidence_cls, import_date)
 
     min_rows = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_MIN_ROWS', '0' if test_mode else '100'))
-    allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
+    should_allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
     evidence_count = await db.select(db.func.count(evidence_cls.evidence_id)).scalar()
-    if evidence_count < min_rows and not allow_empty:
+    if evidence_count < min_rows and not should_allow_empty:
         raise RuntimeError(f"Drug indication stage has {evidence_count} rows, below minimum {min_rows}.")
 
-    publish_test_mode = os.getenv('HLTHPRT_DRUG_INDICATIONS_PUBLISH_TEST_MODE', '').lower() in {'1', 'true', 'yes'}
-    published = False
-    if not test_mode or publish_test_mode:
+    should_publish_stage = _should_publish_stage(test_mode)
+    if should_publish_stage:
         async with db.transaction():
             await _publish(schema, import_date)
-        published = True
 
-    result = {
+    result_dict = {
         'import_id': import_date,
         'stage_table': evidence_cls.__tablename__,
-        'published': published,
+        'published': should_publish_stage,
         'labels_scanned': scanned,
         'condition_evidence_rows': evidence_count,
         'matched_labels': matched,
         'test_mode': bool(test_mode),
     }
-    print(f"Drug indications import done: {result}")
+    print(f"Drug indications import done: {result_dict}")
     print_time_info(start)
-    return result
+    return result_dict
+
+
+async def _rxnorm_ids_by_product() -> dict[str, list[str]]:
+    rxnorm_ids_by_product: dict[str, list[str]] = {}
+    async with db.transaction():
+        async for product in Product.query.iterate():
+            if getattr(product, 'product_ndc', None):
+                rxnorm_ids_by_product[product.product_ndc] = list(getattr(product, 'rxnorm_ids', None) or [])
+    return rxnorm_ids_by_product
+
+
+async def _scan_condition_evidence(
+    evidence_cls,
+    rxnorm_ids_by_product: dict[str, list[str]],
+    relationships_by_rxnorm,
+    batch_size: int,
+    test_limit: int,
+    test_mode: bool,
+    run_id,
+) -> tuple[int, int]:
+    evidence_rows = []
+    scanned = 0
+    matched = 0
+    async with db.transaction():
+        async for label in Label.query.iterate():
+            scanned += 1
+            for evidence_row in _official_matches(label, rxnorm_ids_by_product, relationships_by_rxnorm):
+                evidence_rows.append(evidence_row)
+                matched += 1
+            if len(evidence_rows) >= batch_size:
+                await push_objects(evidence_rows, evidence_cls)
+                evidence_rows = []
+                _enqueue_scan_progress(run_id, scanned, matched, test_limit, test_mode)
+            if test_mode and scanned >= test_limit:
+                break
+
+    await push_objects(evidence_rows, evidence_cls)
+    return scanned, matched
+
+
+def _enqueue_scan_progress(run_id, scanned: int, matched: int, test_limit: int, test_mode: bool) -> None:
+    enqueue_live_progress(
+        run_id=run_id,
+        importer="drug-indications",
+        status="running",
+        phase="drug indications scanning labels",
+        unit="labels",
+        done=scanned,
+        total=test_limit if test_mode else None,
+        message=f"scanned {scanned} labels; matched {matched}",
+    )
+
+
+def _should_publish_stage(test_mode: bool) -> bool:
+    should_publish_test_mode = os.getenv('HLTHPRT_DRUG_INDICATIONS_PUBLISH_TEST_MODE', '').lower() in {'1', 'true', 'yes'}
+    return not test_mode or should_publish_test_mode
 
 
 async def main(test_mode=False, import_id=None):
+    """Run the drug-indications importer as a standalone async entrypoint."""
     loop = asyncio.get_event_loop()
     await init_db(db, loop)
     try:
