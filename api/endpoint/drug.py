@@ -42,25 +42,15 @@ async def product_ndc_obj(request, product_ndc):
 
 @blueprint.get('/ndc/<product_ndc>/packages')
 async def product_packages_obj(request, product_ndc):
-    data = []
-
-    q = Package.query.where(Package.product_ndc == product_ndc)
-    #
-    #
-    #     db.select([
-    #     User,
-    #     visits,
-    # ]).select_from(
-    #     User.outerjoin(Visit)
-    # ).group_by(
-    #     *User,
-    # ).load((User, ColumnLoader(visits)))
+    """Return packages attached to one product NDC."""
+    package_results = []
+    package_query = Package.query.where(Package.product_ndc == product_ndc)
 
     async with db.transaction():
-        async for package in q.iterate():
-            data.append(package.to_json_dict())
+        async for package in package_query.iterate():
+            package_results.append(package.to_json_dict())
 
-    return response.json(data)
+    return response.json(package_results)
 
 
 @blueprint.get('/ndc/package/<package_ndc>')
@@ -112,6 +102,7 @@ async def label_product_ndc_obj(request, product_ndc):
 @blueprint.get('/list-product/all/<page:int>/', name='list_product_all_with_page')
 @blueprint.get('/list-product/all/<page:int>/<results_per_page:int>', name='list_product_all_with_page_and_results_per_page')
 async def list_product_all(request, letter='a', page=0, results_per_page = 49999, prefix='', separator='', suffix=''):
+    """Return a paginated list of product NDC display names."""
     for (key, value) in request.query_args:
         if key == 'prefix' and value:
             prefix = value
@@ -124,24 +115,25 @@ async def list_product_all(request, letter='a', page=0, results_per_page = 49999
     if not page or page<0:
         page = 0
 
-    data = []
-    q = db.select([Product.product_ndc, Product.generic_name, Product.brand_name]).order_by(Product.generic_name, Product.brand_name).limit(
+    product_options = []
+    product_query = db.select([Product.product_ndc, Product.generic_name, Product.brand_name]).order_by(Product.generic_name, Product.brand_name).limit(
         results_per_page).offset(results_per_page * page)
 
 
     async with db.transaction():
-        async for res in q.iterate():
-            name = res["generic_name"] or res["brand_name"] or ""
-            if res["brand_name"] and res["generic_name"] and res['brand_name'].lower() != res['generic_name'].lower():
-                name = res["brand_name"]
+        async for product_row in product_query.iterate():
+            product_name = product_row["generic_name"] or product_row["brand_name"] or ""
+            if (
+                product_row["brand_name"]
+                and product_row["generic_name"]
+                and product_row['brand_name'].lower() != product_row['generic_name'].lower()
+            ):
+                product_name = product_row["brand_name"]
 
-            obj = {'product_ndc': res['product_ndc'], 'name': name}
-            data.append(obj)
-            # if name:
-            #     data += f'{prefix}{quote(str(name.capitalize()), safe="")}{separator}{res["product_ndc"]}{suffix}\n'
+            product_options.append({'product_ndc': product_row['product_ndc'], 'name': product_name})
 
-    if data:
-        return response.json(data)
+    if product_options:
+        return response.json(product_options)
 
     raise sanic.exceptions.NotFound
 
@@ -150,24 +142,24 @@ async def list_product_all(request, letter='a', page=0, results_per_page = 49999
 @blueprint.get('/list-product/<letter>/<page:int>', name='list_product_letter_with_page')
 @blueprint.get('/list-product/<letter>/<page:int>/<results_per_page:int>', name='list_product_letter_with_page_and_results_per_page')
 async def list_product_letter(request, letter, page=0, results_per_page = 100):
+    """Return products whose generic name starts with the requested letter."""
     if not letter or len(letter) > 1:
         raise sanic.exceptions.NotFound
     if not page or page<0:
         page = 0
 
-    data = []
-    q = db.select([Product.product_ndc, Product.generic_name]).where(
+    product_options = []
+    product_query = db.select([Product.product_ndc, Product.generic_name]).where(
         Product.generic_name.ilike(f"{letter}%")).order_by(Product.generic_name, Product.brand_name).limit(
         results_per_page).offset(results_per_page * page)
 
 
     async with db.transaction():
-        async for res in q.iterate():
-            obj = {'product_ndc': res['product_ndc'], 'name': res['generic_name']}
-            data.append(obj)
+        async for product_row in product_query.iterate():
+            product_options.append({'product_ndc': product_row['product_ndc'], 'name': product_row['generic_name']})
 
-    if data:
-        return response.json(data)
+    if product_options:
+        return response.json(product_options)
     raise sanic.exceptions.NotFound
 
 @blueprint.get('/name/<product_name>/products', name='product_data_by_name')

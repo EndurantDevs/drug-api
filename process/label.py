@@ -50,10 +50,10 @@ async def download_label_content(ctx, task):
     )
 
     with tempfile.TemporaryDirectory() as tmpdirname:
-        p = Path(task.get('file'))
-        tmp_filename = str(PurePath(str(tmpdirname), p.name))
+        archive_path = Path(task.get('file'))
+        tmp_filename = str(PurePath(str(tmpdirname), archive_path.name))
         await download_it_and_save(task.get('file'), tmp_filename)
-        json_tmp_file = str(PurePath(str(tmpdirname), p.stem))
+        json_tmp_file = str(PurePath(str(tmpdirname), archive_path.stem))
 
         await unzip(tmp_filename, tmpdirname)
 
@@ -283,8 +283,8 @@ async def init_label_file(ctx, task=None):
                               job_serializer=msgpack.packb,
                               job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
 
-    r = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
-    obj = loads(r.content)
+    response_content = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
+    obj = loads(response_content.content)
     partitions = list(obj['results']['drug']['label']['partitions'])
     if test_mode:
         partitions = partitions[:1]

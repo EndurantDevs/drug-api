@@ -68,9 +68,9 @@ async def download_content(ctx, task):
         message=f"downloading partition {partition_index}/{partition_count}",
     )
     with tempfile.TemporaryDirectory() as tmpdirname:
-        p = Path(task.get('file'))
-        tmp_filename = str(PurePath(str(tmpdirname), p.name))
-        json_tmp_file = str(PurePath(str(tmpdirname), p.stem))
+        archive_path = Path(task.get('file'))
+        tmp_filename = str(PurePath(str(tmpdirname), archive_path.name))
+        json_tmp_file = str(PurePath(str(tmpdirname), archive_path.stem))
 
         await download_it_and_save(task.get('file'), tmp_filename)
 
@@ -386,9 +386,9 @@ async def init_file(ctx, task=None):
                               job_serializer=msgpack.packb,
                               job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
     print('Downloading data from: ', os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
-    r = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
+    response_content = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
     # it is very small in this case
-    obj = loads(r.content)
+    obj = loads(response_content.content)
     partitions = list(obj['results']['drug']['ndc']['partitions'])
     if test_mode:
         partitions = partitions[:1]
