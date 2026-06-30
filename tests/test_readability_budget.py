@@ -4,7 +4,6 @@ import textwrap
 from importlib import util
 from pathlib import Path
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "readability_budget.py"
 SPEC = util.spec_from_file_location("readability_budget", SCRIPT_PATH)
 readability_budget = util.module_from_spec(SPEC)
