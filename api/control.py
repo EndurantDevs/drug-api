@@ -15,6 +15,7 @@ blueprint = Blueprint("control", url_prefix="/control/v1")
 
 @blueprint.exception(SanicException)
 async def control_error(request, exc):
+    """Return Sanic control-plane errors as JSON envelopes."""
     return response.json({"error": {"code": "control_error", "message": str(exc), "request_id": getattr(request, "id", None)}}, status=getattr(exc, "status_code", 500))
 
 
@@ -37,6 +38,7 @@ def _auth_error(message: str):
 
 @blueprint.get("/importers")
 async def control_importers(request):
+    """List importers that this node can enqueue."""
     if auth_error := _require_control_auth(request):
         return auth_error
     return response.json({"items": importer_registry(), "next_cursor": None})
@@ -44,6 +46,7 @@ async def control_importers(request):
 
 @blueprint.get("/health/node")
 async def control_node_health(request):
+    """Return local node health and worker queue status."""
     if auth_error := _require_control_auth(request):
         return auth_error
     return response.json(node_health(), default=str)
@@ -51,6 +54,7 @@ async def control_node_health(request):
 
 @blueprint.get("/workers")
 async def control_workers(request):
+    """List registered workers and their current local state."""
     if auth_error := _require_control_auth(request):
         return auth_error
     return response.json({"items": worker_registry(), "next_cursor": None}, default=str)
@@ -58,6 +62,7 @@ async def control_workers(request):
 
 @blueprint.post("/workers/ensure")
 async def control_ensure_worker(request):
+    """Start or confirm a worker for an importer or queue."""
     if auth_error := _require_control_auth(request):
         return auth_error
     payload = request.json if isinstance(request.json, dict) else {}
@@ -66,6 +71,7 @@ async def control_ensure_worker(request):
 
 @blueprint.post("/imports")
 async def control_create_import(request):
+    """Create an import run and enqueue its initial work."""
     if auth_error := _require_control_auth(request):
         return auth_error
     payload = request.json if isinstance(request.json, dict) else {}
@@ -78,6 +84,7 @@ async def control_create_import(request):
 
 @blueprint.get("/imports")
 async def control_list_imports(request):
+    """List import runs filtered by status or importer."""
     if auth_error := _require_control_auth(request):
         return auth_error
     runs = await list_import_runs(status=request.args.get("status"), importer=request.args.get("importer"), limit=int(request.args.get("limit") or 50))
@@ -86,6 +93,7 @@ async def control_list_imports(request):
 
 @blueprint.get("/imports/<run_id>")
 async def control_get_import(request, run_id):
+    """Return one import run by id."""
     if auth_error := _require_control_auth(request):
         return auth_error
     run = await get_import_run(run_id)
@@ -96,6 +104,7 @@ async def control_get_import(request, run_id):
 
 @blueprint.post("/imports/<run_id>/cancel")
 async def control_cancel_import(request, run_id):
+    """Request cancellation for an import run."""
     if auth_error := _require_control_auth(request):
         return auth_error
     try:
@@ -109,6 +118,7 @@ async def control_cancel_import(request, run_id):
 
 @blueprint.post("/imports/<run_id>/retry")
 async def control_retry_import(request, run_id):
+    """Create a retry run from a previous import run."""
     if auth_error := _require_control_auth(request):
         return auth_error
     payload = request.json if isinstance(request.json, dict) else {}
