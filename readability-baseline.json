@@ -1,0 +1,249 @@
+{
+  "issue_counts": {
+    "deep_nesting": 4,
+    "inline_suppressions": 15,
+    "long_files": 1,
+    "long_functions": 10,
+    "syntax_errors": 0
+  },
+  "issues": {
+    "deep_nesting": [
+      {
+        "depth": 6,
+        "function": "download_it_and_save",
+        "id": "deep_nesting:process/ext/utils.py:download_it_and_save",
+        "limit": 4,
+        "line": 25,
+        "path": "process/ext/utils.py"
+      },
+      {
+        "depth": 7,
+        "function": "process_label_results",
+        "id": "deep_nesting:process/label.py:process_label_results",
+        "limit": 4,
+        "line": 117,
+        "path": "process/label.py"
+      },
+      {
+        "depth": 5,
+        "function": "_shutdown_impl",
+        "id": "deep_nesting:process/ndc_product.py:_shutdown_impl",
+        "limit": 4,
+        "line": 267,
+        "path": "process/ndc_product.py"
+      },
+      {
+        "depth": 7,
+        "function": "process_results",
+        "id": "deep_nesting:process/ndc_product.py:process_results",
+        "limit": 4,
+        "line": 136,
+        "path": "process/ndc_product.py"
+      }
+    ],
+    "inline_suppressions": [
+      {
+        "id": "inline_suppression:api/control_imports.py:python_pylint_disable:20ab6557c5ba",
+        "line": 160,
+        "path": "api/control_imports.py",
+        "pattern": "python_pylint_disable",
+        "text": "from api.control_workers import worker_registry  # pylint: disable=import-outside-toplevel"
+      },
+      {
+        "id": "inline_suppression:api/control_imports.py:python_pylint_disable:62ffcb277bd5",
+        "line": 390,
+        "path": "api/control_imports.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception as exc:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_imports.py:python_pylint_disable:eeb594c3fd53",
+        "line": 171,
+        "path": "api/control_imports.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_imports.py:python_pylint_disable:eeb594c3fd53",
+        "line": 184,
+        "path": "api/control_imports.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_workers.py:python_pylint_disable:0ec50a7ae8d2",
+        "line": 75,
+        "path": "api/control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception as exc:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_workers.py:python_pylint_disable:2739d53c8a75",
+        "line": 490,
+        "path": "api/control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_workers.py:python_pylint_disable:2739d53c8a75",
+        "line": 493,
+        "path": "api/control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_workers.py:python_pylint_disable:2739d53c8a75",
+        "line": 501,
+        "path": "api/control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_workers.py:python_pylint_disable:2739d53c8a75",
+        "line": 504,
+        "path": "api/control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "except Exception:  # pylint: disable=broad-exception-caught"
+      },
+      {
+        "id": "inline_suppression:api/control_workers.py:python_pylint_disable:99d3a1f0abc4",
+        "line": 87,
+        "path": "api/control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "process = subprocess.Popen(  # pylint: disable=consider-using-with"
+      },
+      {
+        "id": "inline_suppression:process/import_status_events.py:python_noqa:9b4d4dfcf98e",
+        "line": 99,
+        "path": "process/import_status_events.py",
+        "pattern": "python_noqa",
+        "text": "with urllib.request.urlopen(request, timeout=_timeout_seconds()) as response:  # noqa: S310 - internal control URL"
+      },
+      {
+        "id": "inline_suppression:process/label.py:python_pylint_disable:ca5df946dbd7",
+        "line": 34,
+        "path": "process/label.py",
+        "pattern": "python_pylint_disable",
+        "text": "# pylint: disable=too-many-locals"
+      },
+      {
+        "id": "inline_suppression:tests/test_control_workers.py:python_pylint_disable:02c3c18d832f",
+        "line": 17,
+        "path": "tests/test_control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "from process import DrugIndications  # pylint: disable=import-outside-toplevel"
+      },
+      {
+        "id": "inline_suppression:tests/test_control_workers.py:python_pylint_disable:4e57b84951f9",
+        "line": 136,
+        "path": "tests/test_control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "spec = control_workers._BY_QUEUE[NDC_QUEUE_NAME]  # pylint: disable=protected-access"
+      },
+      {
+        "id": "inline_suppression:tests/test_control_workers.py:python_pylint_disable:88e1311c0b73",
+        "line": 138,
+        "path": "tests/test_control_workers.py",
+        "pattern": "python_pylint_disable",
+        "text": "assert control_workers._find_running_pid(spec) == 222  # pylint: disable=protected-access"
+      }
+    ],
+    "long_files": [
+      {
+        "id": "long_file:api/control_workers.py",
+        "limit": 500,
+        "lines": 563,
+        "path": "api/control_workers.py"
+      }
+    ],
+    "long_functions": [
+      {
+        "function": "create_import_run",
+        "id": "long_function:api/control_imports.py:create_import_run",
+        "limit": 60,
+        "line": 188,
+        "lines": 73,
+        "path": "api/control_imports.py"
+      },
+      {
+        "function": "_worker_job_manifest",
+        "id": "long_function:api/control_workers.py:_worker_job_manifest",
+        "limit": 60,
+        "line": 228,
+        "lines": 80,
+        "path": "api/control_workers.py"
+      },
+      {
+        "function": "control_single_job_start",
+        "id": "long_function:process/control_lifecycle.py:control_single_job_start",
+        "limit": 60,
+        "line": 19,
+        "lines": 69,
+        "path": "process/control_lifecycle.py"
+      },
+      {
+        "function": "mark_control_run",
+        "id": "long_function:process/control_lifecycle.py:mark_control_run",
+        "limit": 60,
+        "line": 144,
+        "lines": 70,
+        "path": "process/control_lifecycle.py"
+      },
+      {
+        "function": "import_drug_indications",
+        "id": "long_function:process/drug_indications.py:import_drug_indications",
+        "limit": 60,
+        "line": 264,
+        "lines": 79,
+        "path": "process/drug_indications.py"
+      },
+      {
+        "function": "_label_shutdown_impl",
+        "id": "long_function:process/label.py:_label_shutdown_impl",
+        "limit": 60,
+        "line": 189,
+        "lines": 84,
+        "path": "process/label.py"
+      },
+      {
+        "function": "download_label_content",
+        "id": "long_function:process/label.py:download_label_content",
+        "limit": 60,
+        "line": 33,
+        "lines": 82,
+        "path": "process/label.py"
+      },
+      {
+        "function": "_shutdown_impl",
+        "id": "long_function:process/ndc_product.py:_shutdown_impl",
+        "limit": 60,
+        "line": 267,
+        "lines": 108,
+        "path": "process/ndc_product.py"
+      },
+      {
+        "function": "download_content",
+        "id": "long_function:process/ndc_product.py:download_content",
+        "limit": 60,
+        "line": 52,
+        "lines": 82,
+        "path": "process/ndc_product.py"
+      },
+      {
+        "function": "process_results",
+        "id": "long_function:process/ndc_product.py:process_results",
+        "limit": 60,
+        "line": 136,
+        "lines": 92,
+        "path": "process/ndc_product.py"
+      }
+    ],
+    "syntax_errors": []
+  },
+  "thresholds": {
+    "max_file_lines": 500,
+    "max_function_lines": 60,
+    "max_nesting_depth": 4
+  },
+  "version": 1
+}

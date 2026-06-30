@@ -24,6 +24,8 @@ Key pages:
 - [Label import](./docs/imports/label.md)
 - [Drug indications import](./docs/imports/drug-indications.md)
 - [Drug indications DevOps](./docs/devops/drug-indications.md)
+- [Architecture](./docs/architecture.md)
+- [Readability budget](./docs/readability.md)
 
 ## Source Families
 
