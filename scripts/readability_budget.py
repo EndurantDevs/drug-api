@@ -194,6 +194,26 @@ def _has_boolean_prefix(name: str, prefixes: Iterable[str]) -> bool:
     return any(normalized.startswith(prefix) for prefix in prefixes)
 
 
+def _is_boolean_method_name(name: str) -> bool:
+    normalized = name.strip("_")
+    known_predicates = {
+        "isalnum",
+        "isalpha",
+        "isascii",
+        "isdecimal",
+        "isdigit",
+        "isidentifier",
+        "islower",
+        "isnumeric",
+        "isspace",
+        "istitle",
+        "isupper",
+        "startswith",
+        "endswith",
+    }
+    return normalized in known_predicates or normalized.startswith(("is_", "has_"))
+
+
 def _is_bool_expression(node: ast.AST) -> bool:
     if isinstance(node, ast.Constant) and isinstance(node.value, bool):
         return True
@@ -205,7 +225,7 @@ def _is_bool_expression(node: ast.AST) -> bool:
         return True
     if isinstance(node, ast.Call):
         if isinstance(node.func, ast.Attribute):
-            return node.func.attr.startswith(("is", "has", "startswith", "endswith"))
+            return _is_boolean_method_name(node.func.attr)
         if isinstance(node.func, ast.Name):
             return _has_boolean_prefix(node.func.id, DEFAULT_BOOLEAN_PREFIXES)
     return False
