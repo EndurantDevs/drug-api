@@ -16,6 +16,7 @@ class JSONOutputMixin:
 
     @staticmethod
     def is_iterable(x):
+        """Return whether a value can be iterated."""
         try:
             iter(x)
             return True
@@ -24,6 +25,7 @@ class JSONOutputMixin:
 
     @staticmethod
     def map_anything(x, fn):
+        """Recursively apply a function to scalar values inside containers."""
         if isinstance(x, str):
             return fn(x)
         if isinstance(x, dict):
@@ -34,6 +36,7 @@ class JSONOutputMixin:
 
     @staticmethod
     def prepare_for_json(value):
+        """Convert common non-JSON scalar values into JSON-safe values."""
         if isinstance(value, (date, datetime)):
             return value.isoformat().split('+')[0] + 'Z'
         if isinstance(value, UUID):
@@ -41,15 +44,18 @@ class JSONOutputMixin:
         return value
 
     def to_json_dict(self):
-        res = {
+        """Return model columns and executable fields as a JSON-safe dict."""
+        result_dict = {
             **dict(self._get_column_items()),
             **self._get_executable_fields()
         }
-        data = {k: v for k, v in res.items() if k not in self.EXCLUDE_FIELDS}
+        data = {k: v for k, v in result_dict.items() if k not in self.EXCLUDE_FIELDS}
         return self.map_anything(data, self.prepare_for_json)
 
     def to_json(self, rel=None):
+        """Serialize this model to a JSON string."""
         def extended_encoder(x):
+            """Encode datetime and UUID values when dumping JSON."""
             if isinstance(x, datetime):
                 return x.isoformat()
             if isinstance(x, UUID):

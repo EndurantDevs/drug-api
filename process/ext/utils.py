@@ -15,6 +15,7 @@ _MODEL_CACHE = {}
 
 
 async def download_it(url):
+    """Download a URL with a small retrying HTTPX client."""
     transport = httpx.AsyncHTTPTransport(retries=3)
     timeout = httpx.Timeout(5)
     async with httpx.AsyncClient(transport=transport, timeout=timeout, headers=headers) as client:
@@ -23,22 +24,27 @@ async def download_it(url):
 
 
 async def download_it_and_save(url, filepath):
+    """Stream a URL into a local file, asking ARQ to retry transient failures."""
     transport = httpx.AsyncHTTPTransport(retries=3)
     timeout = httpx.Timeout(10)
     async with async_open(filepath, 'wb+') as afp:
         async with httpx.AsyncClient(timeout=timeout, transport=transport, headers=headers) as client:
             async with client.stream('GET', url) as response:
-                if response.status_code == 200:
-                    try:
-                        async for chunk in response.aiter_bytes(chunk_size=HTTP_CHUNK_SIZE):
-                            await afp.write(chunk)
-                    except (httpx.TimeoutException, httpx.ReadError, httpx.NetworkError):
-                        raise Retry()
-                else:
-                    raise Retry()
+                await _write_response_chunks(response, afp)
+
+
+async def _write_response_chunks(response, afp) -> None:
+    if response.status_code != 200:
+        raise Retry()
+    try:
+        async for chunk in response.aiter_bytes(chunk_size=HTTP_CHUNK_SIZE):
+            await afp.write(chunk)
+    except (httpx.TimeoutException, httpx.ReadError, httpx.NetworkError):
+        raise Retry()
 
 
 def make_class(model_cls, table_suffix):
+    """Return a cached model class for a suffixed copy of a table."""
     key = (model_cls, str(table_suffix))
     if key in _MODEL_CACHE:
         return _MODEL_CACHE[key]
@@ -64,6 +70,7 @@ def make_class(model_cls, table_suffix):
 
 
 async def push_objects(obj_list, cls):
+    """Bulk insert objects, falling back to row-by-row inserts on conflicts."""
     if obj_list:
         try:
             await cls.insert().all(obj_list)
@@ -71,11 +78,12 @@ async def push_objects(obj_list, cls):
             for obj in obj_list:
                 try:
                     await cls.insert().all([obj])
-                except (SQLAlchemyError, UniqueViolationError) as e:
-                    print(e)
+                except (SQLAlchemyError, UniqueViolationError) as exc:
+                    print(exc)
 
 
 def print_time_info(start):
+    """Print a human-readable elapsed import duration."""
     now = datetime.datetime.now()
     delta = now - start
     print('Import Time Delta: ', delta)

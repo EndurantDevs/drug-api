@@ -21,6 +21,7 @@ def db_group():
 @click.command(help="Downgrade to revision")
 @click.option("-r", help="Revision", default="-1")
 def downgrade(r):
+    """Downgrade the database to the requested Alembic revision."""
     alembic_cfg = Config(ALEMBIC_INI)
     make_downgrade(alembic_cfg, r)
 
@@ -28,6 +29,7 @@ def downgrade(r):
 @click.command(help="Apply migrations")
 @click.option("-r", help="Revision (head by default)", default="head")
 def migrate(r):
+    """Apply Alembic migrations through the requested revision."""
     alembic_cfg = Config(ALEMBIC_INI)
     upgrade(alembic_cfg, r)
 
@@ -35,21 +37,24 @@ def migrate(r):
 @click.command(help="Auto generate migrations")
 @click.option("-m", help="Migration message", required=True)
 def generate(m):
+    """Generate an Alembic migration from model metadata changes."""
     alembic_cfg = Config(ALEMBIC_INI)
-    revision_kwargs = {'autogenerate': True}
+    revision_kwargs_dict = {'autogenerate': True}
     if m is not None:
-        revision_kwargs['message'] = m
-    revision(alembic_cfg, **revision_kwargs)
+        revision_kwargs_dict['message'] = m
+    revision(alembic_cfg, **revision_kwargs_dict)
 
 
 @click.command(help="List changeset scripts in chronological order")
 def history():
+    """Show Alembic migration history."""
     alembic_cfg = Config(ALEMBIC_INI)
     show_history(alembic_cfg)
 
 
 @click.command(help="Show current revision")
 def current():
+    """Show the current Alembic revision."""
     alembic_cfg = Config(ALEMBIC_INI)
     show_current(alembic_cfg)
 
