@@ -9,7 +9,6 @@ from typing import Any, AsyncIterator, Optional, Tuple
 
 from sanic.exceptions import NotFound
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func as sa_func
 from sqlalchemy import insert as sa_insert
 from sqlalchemy import select as sa_select
 from sqlalchemy import text as sa_text
@@ -20,8 +19,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.schema import Table as SATable
-from sqlalchemy.sql import Executable, Select
-from sqlalchemy.sql.dml import Delete, Insert, Update
+from sqlalchemy.sql import Executable
+
+from db.statement_adapters import (DeleteAdapter, FuncProxy, InsertAdapter, SelectAdapter, StatementAdapter,
+                                   UpdateAdapter)
 
 
 class QueryDescriptor:
@@ -79,177 +80,42 @@ def _coerce_columns(columns: Tuple[Any, ...]) -> Tuple[Any, ...]:
     return columns
 
 
-def _returns_single_model(stmt: Executable) -> bool:
-    try:
-        descriptions = list(getattr(stmt, "column_descriptions", []) or [])
-    except Exception:
-        return False
-    return len(descriptions) == 1 and descriptions[0].get("entity") is not None
-
-
-class RowAdapter:
-    def __init__(self, row: Any):
-        self._row = row
-        self._mapping = row._mapping
-
-    def __getitem__(self, key: Any):
-        if isinstance(key, int):
-            return self._row[key]
-        return self._mapping[key]
-
-    def __iter__(self):
-        return iter(self._row)
-
-    def __len__(self) -> int:
-        return len(self._row)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self._mapping.get(key, default)
-
-    def keys(self):
-        return self._mapping.keys()
-
-    def items(self):
-        return self._mapping.items()
-
-    def values(self):
-        return self._mapping.values()
-
-
-class StatementAdapter:
-    def __init__(self, database: "Database", stmt: Executable):
-        self._db = database
-        self._stmt = stmt
-
-    def _wrap(self, stmt: Any):
-        if isinstance(stmt, Select):
-            return SelectAdapter(self._db, stmt)
-        if isinstance(stmt, Insert):
-            return InsertAdapter(self._db, stmt)
-        if isinstance(stmt, Update):
-            return UpdateAdapter(self._db, stmt)
-        if isinstance(stmt, Delete):
-            return DeleteAdapter(self._db, stmt)
-        return stmt
-
-    def __getattr__(self, item: str):
-        attr = getattr(self._stmt, item)
-        if callable(attr):
-            def _wrapped(*args: Any, **kwargs: Any):
-                return self._wrap(attr(*args, **kwargs))
-
-            return _wrapped
-        return attr
-
-    def __clause_element__(self):
-        return self._stmt
-
-    @property
-    def statement(self):
-        return self._stmt
-
-    async def execute(self, params: Any = None, **kwargs: Any):
-        execute_params = params if params is not None else kwargs
-        async with self._db.session() as session:
-            return await session.execute(self._stmt, execute_params)
-
-    async def all(self, params: Any = None, **kwargs: Any):
-        result = await self.execute(params, **kwargs)
-        if isinstance(self._stmt, Select):
-            if _returns_single_model(self._stmt):
-                return result.scalars().all()
-            return [RowAdapter(row) for row in result.all()]
-        return result.all()
-
-    async def first(self, params: Any = None, **kwargs: Any):
-        result = await self.execute(params, **kwargs)
-        if isinstance(self._stmt, Select):
-            if _returns_single_model(self._stmt):
-                return result.scalars().first()
-            row = result.first()
-            return RowAdapter(row) if row is not None else None
-        return result.first()
-
-    async def scalar(self, params: Any = None, **kwargs: Any):
-        result = await self.execute(params, **kwargs)
-        return result.scalar()
-
-    async def status(self, params: Any = None, **kwargs: Any):
-        result = await self.execute(params, **kwargs)
-        return getattr(result, "rowcount", None)
-
-    async def iterate(self, params: Any = None, **kwargs: Any):
-        execute_params = params if params is not None else kwargs
-        async with self._db.session() as session:
-            async_result = await session.stream(self._stmt, execute_params)
-            if isinstance(self._stmt, Select) and _returns_single_model(self._stmt):
-                async for row in async_result.scalars():
-                    yield row
-            else:
-                async for row in async_result:
-                    yield RowAdapter(row)
-
-
-class SelectAdapter(StatementAdapter):
-    pass
-
-
-class InsertAdapter(StatementAdapter):
-    async def all(self, rows: Any = None, **kwargs: Any):
-        payload = rows if rows is not None else kwargs
-        async with self._db.session() as session:
-            result = await session.execute(self._stmt, payload)
-            return result.all() if getattr(result, "returns_rows", False) else []
-
-
-class UpdateAdapter(StatementAdapter):
-    pass
-
-
-class DeleteAdapter(StatementAdapter):
-    pass
-
-
-class FuncProxy:
-    def __getattr__(self, item: str):
-        attr = getattr(sa_func, item)
-
-        def _call(*args: Any, **kwargs: Any):
-            return attr(*args, **kwargs)
-
-        return _call
-
-
 class ConnectionProxy:
     def __init__(self, connection):
         self._connection = connection
         self.raw_connection = None
 
     async def all(self, stmt: Any, **params: Any):
+        """Execute a statement and return all mapping rows."""
         stmt = sa_text(stmt) if isinstance(stmt, str) else stmt
         result = await self._connection.execute(stmt, params)
         return result.mappings().all()
 
     async def first(self, stmt: Any, **params: Any):
+        """Execute a statement and return the first mapping row."""
         stmt = sa_text(stmt) if isinstance(stmt, str) else stmt
         result = await self._connection.execute(stmt, params)
         return result.mappings().first()
 
     async def scalar(self, stmt: Any, **params: Any):
+        """Execute a statement and return its first scalar value."""
         stmt = sa_text(stmt) if isinstance(stmt, str) else stmt
         result = await self._connection.execute(stmt, params)
         return result.scalar()
 
     async def status(self, stmt: Any, **params: Any):
+        """Execute a statement and return its affected row count."""
         stmt = sa_text(stmt) if isinstance(stmt, str) else stmt
         result = await self._connection.execute(stmt, params)
         return getattr(result, "rowcount", None)
 
     @asynccontextmanager
     async def transaction(self):
+        """Expose the current connection as a transaction-like context."""
         yield self
 
     async def close(self):
+        """Satisfy the async connection interface without closing ownership."""
         return None
 
 
@@ -257,6 +123,7 @@ _SESSION: contextvars.ContextVar[AsyncSession] = contextvars.ContextVar("db_sess
 
 
 def current_session() -> AsyncSession:
+    """Return the SQLAlchemy session bound to the current context."""
     try:
         return _SESSION.get()
     except LookupError as exc:
@@ -270,7 +137,7 @@ def _current_session_or_none() -> AsyncSession | None:
         return None
 
 
-def _env_bool(value: Optional[str], default: bool = False) -> bool:
+def _is_env_enabled(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "on", "yes"}
@@ -290,6 +157,7 @@ class Database:
         self.func = FuncProxy()
 
     async def connect(self) -> None:
+        """Initialize the async SQLAlchemy engine and session factory."""
         if self.engine is not None:
             return
 
@@ -317,7 +185,7 @@ class Database:
             url,
             pool_size=pool_size,
             max_overflow=max_overflow,
-            echo=_env_bool(os.getenv("HLTHPRT_DB_ECHO") or os.getenv("DB_ECHO")),
+            echo=_is_env_enabled(os.getenv("HLTHPRT_DB_ECHO") or os.getenv("DB_ECHO")),
             pool_pre_ping=True,
         )
         self.session_factory = async_sessionmaker(
@@ -327,6 +195,7 @@ class Database:
         )
 
     async def disconnect(self) -> None:
+        """Dispose the async engine and clear the session factory."""
         if self.engine is None:
             return
         await self.engine.dispose()
@@ -334,10 +203,12 @@ class Database:
         self.session_factory = None
 
     def select(self, *columns: Any):
+        """Build a select adapter for the requested columns or model."""
         columns = _coerce_columns(columns)
         return SelectAdapter(self, sa_select(*columns))
 
     def insert(self, *args: Any, **kwargs: Any):
+        """Build an insert adapter, using PostgreSQL insert for ORM tables."""
         target = args[0] if args else None
         if isinstance(target, SATable) or hasattr(target, "__table__"):
             if hasattr(target, "__table__"):
@@ -346,33 +217,41 @@ class Database:
         return InsertAdapter(self, sa_insert(*args, **kwargs))
 
     def update(self, *args: Any, **kwargs: Any):
+        """Build an update adapter."""
         return UpdateAdapter(self, sa_update(*args, **kwargs))
 
     def delete(self, *args: Any, **kwargs: Any):
+        """Build a delete adapter."""
         return DeleteAdapter(self, sa_delete(*args, **kwargs))
 
     async def execute(self, stmt: Any, **params: Any):
+        """Execute a statement inside a managed session."""
         stmt = sa_text(stmt) if isinstance(stmt, str) else stmt
         async with self.session() as session:
             return await session.execute(stmt, params)
 
     async def all(self, stmt: Any, **params: Any):
+        """Execute a statement and return all mapping rows."""
         result = await self.execute(stmt, **params)
         return result.mappings().all()
 
     async def first(self, stmt: Any, **params: Any):
+        """Execute a statement and return its first mapping row."""
         result = await self.execute(stmt, **params)
         return result.mappings().first()
 
     async def scalar(self, stmt: Any, **params: Any):
+        """Execute a statement and return its first scalar value."""
         result = await self.execute(stmt, **params)
         return result.scalar()
 
     async def status(self, stmt: Any, **params: Any):
+        """Execute a statement and return its affected row count."""
         result = await self.execute(stmt, **params)
         return getattr(result, "rowcount", None)
 
     async def create_table(self, table: SATable, **kwargs: Any) -> None:
+        """Create a table and its schema when needed."""
         if self.engine is None:
             await self.connect()
         assert self.engine is not None
@@ -385,6 +264,7 @@ class Database:
             await connection.run_sync(table.create, **kwargs)
 
     async def execute_ddl(self, statement: str) -> None:
+        """Execute raw DDL using autocommit."""
         if self.engine is None:
             await self.connect()
         assert self.engine is not None
@@ -396,6 +276,7 @@ class Database:
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:
+        """Yield the active context session or create a managed one."""
         existing_session = _current_session_or_none()
         if existing_session is not None:
             yield existing_session
@@ -420,6 +301,7 @@ class Database:
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[AsyncSession]:
+        """Yield a session inside a transaction when one is not already active."""
         async with self.session() as session:
             if session.in_transaction():
                 yield session
@@ -429,6 +311,7 @@ class Database:
 
     @asynccontextmanager
     async def acquire(self) -> AsyncIterator[ConnectionProxy]:
+        """Yield a connection proxy backed by an engine transaction."""
         if self.engine is None:
             await self.connect()
         assert self.engine is not None
@@ -436,6 +319,7 @@ class Database:
             yield ConnectionProxy(connection)
 
     def init_app(self, app) -> None:
+        """Register Sanic lifecycle hooks and per-request session middleware."""
         @app.listener("after_server_start")
         async def _on_start(_, __):
             await self.connect()
@@ -481,6 +365,7 @@ db = Database()
 
 
 async def init_db(_: Any = None, loop: Any = None) -> None:
+    """Initialize the module-level database connection."""
     del loop
     await db.connect()
 
