@@ -52,6 +52,7 @@ SELF_PATHS = {
 
 
 def tracked_files() -> list[Path]:
+    """Return paths currently tracked by Git."""
     result = subprocess.run(
         ["git", "ls-files"],
         check=True,
@@ -62,6 +63,7 @@ def tracked_files() -> list[Path]:
 
 
 def is_binary(path: Path) -> bool:
+    """Return whether a file appears to contain binary content."""
     try:
         chunk = path.read_bytes()[:4096]
     except OSError:
@@ -70,6 +72,7 @@ def is_binary(path: Path) -> bool:
 
 
 def check_paths(paths: list[Path]) -> list[str]:
+    """Return hygiene errors for forbidden tracked path names."""
     errors: list[str] = []
     for path in paths:
         parts = set(path.parts)
@@ -81,6 +84,7 @@ def check_paths(paths: list[Path]) -> list[str]:
 
 
 def check_content(paths: list[Path]) -> list[str]:
+    """Return hygiene errors for forbidden tracked text content."""
     errors: list[str] = []
     for path in paths:
         path_str = path.as_posix()
@@ -97,6 +101,7 @@ def check_content(paths: list[Path]) -> list[str]:
 
 
 def main() -> int:
+    """Run all public hygiene checks and return a process exit code."""
     paths = tracked_files()
     errors = check_paths(paths) + check_content(paths)
     if errors:

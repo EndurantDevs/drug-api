@@ -7,6 +7,7 @@ from arq.connections import RedisSettings
 
 
 def redis_dsn() -> str:
+    """Return a Redis DSN with password characters safely quoted."""
     raw = os.environ.get("HLTHPRT_REDIS_ADDRESS") or os.environ.get("REDIS_URL") or "redis://127.0.0.1:6379/0"
     parsed = urlsplit(raw)
     if parsed.scheme != "redis" or not parsed.username or parsed.password is None:
@@ -20,4 +21,5 @@ def redis_dsn() -> str:
 
 
 def redis_settings() -> RedisSettings:
+    """Build ARQ Redis settings from the normalized Redis DSN."""
     return RedisSettings.from_dsn(redis_dsn())

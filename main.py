@@ -44,6 +44,7 @@ init_api(api)
 @click.option('--debug', help='Enable or disable debugging', is_flag=True)
 @click.option('--accesslog', help='Enable or disable access log', is_flag=True)
 def start(host, port, workers, debug, accesslog):
+    """Run the Sanic HTTP server with configured logging and DB behavior."""
     connection._detect_server_capabilities = lambda *a, **kw: ServerCapabilities(
         advisory_locks=False,
         notifications=False,

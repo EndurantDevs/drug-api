@@ -73,11 +73,13 @@ def process_group():
 
 @click.command(help="Run NDC Import")
 def ndc():
+    """Run the NDC product/package importer."""
     asyncio.run(initiate_product_import())
 
 
 @click.command(help="Run Labeling Data Import")
 def label():
+    """Run the SPL labeling importer."""
     asyncio.run(initiate_label_import())
 
 
@@ -85,6 +87,7 @@ def label():
 @click.option("--test", is_flag=True, help="Process a small label sample for a quick smoke run.")
 @click.option("--import-id", help="Override import id/date suffix for table names.")
 def drug_indications(test, import_id):
+    """Run the drug-condition indication mapping importer."""
     asyncio.run(initiate_drug_indications_import(test_mode=test, import_id=import_id))
 
 

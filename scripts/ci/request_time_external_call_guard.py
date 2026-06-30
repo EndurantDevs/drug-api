@@ -29,6 +29,7 @@ BLOCKED_CALL_PREFIXES = {
 
 
 def dotted_name(node: ast.AST) -> str | None:
+    """Return a dotted name for an AST expression when it has one."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -38,6 +39,7 @@ def dotted_name(node: ast.AST) -> str | None:
 
 
 def check_file(path: Path) -> list[str]:
+    """Return request-time network-call violations for one endpoint file."""
     errors: list[str] = []
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imported_blocked_refs: set[str] = set()
@@ -71,6 +73,7 @@ def check_file(path: Path) -> list[str]:
 
 
 def main() -> int:
+    """Run the endpoint network-call guard and return a process exit code."""
     errors: list[str] = []
     for path in sorted(ENDPOINT_DIR.glob("*.py")):
         errors.extend(check_file(path))
