@@ -13,10 +13,13 @@ blueprint = Blueprint('drug', url_prefix='/drug', version=1)
 
 @blueprint.get('/')
 async def drug_status(request):
+    """Return service metadata and current product/package row counts."""
     async def get_product_count():
+        """Count product rows available to the API."""
         return await db.select(db.func.count(Product.product_id)).scalar()
 
     async def get_package_count():
+        """Count package rows available to the API."""
         return await db.select(db.func.count(Package.package_ndc)).scalar()
 
     product_count = await get_product_count()
@@ -34,6 +37,7 @@ async def drug_status(request):
 
 @blueprint.get('/ndc/<product_ndc>')
 async def product_ndc_obj(request, product_ndc):
+    """Return one product record by product NDC."""
     data = await Product.query.where(Product.product_ndc == product_ndc).first()
     if data:
         return response.json(data.to_json_dict())
@@ -55,6 +59,7 @@ async def product_packages_obj(request, product_ndc):
 
 @blueprint.get('/ndc/package/<package_ndc>')
 async def package_product_ndc_obj(request, package_ndc):
+    """Return one package record with its nested product."""
     data = await Package.query.where(Package.package_ndc == package_ndc).first()
     if data:
         obj = data.to_json_dict()
@@ -66,6 +71,7 @@ async def package_product_ndc_obj(request, package_ndc):
 
 @blueprint.get('/label/package/<package_ndc>')
 async def package_ndc_obj(request, package_ndc):
+    """Return one package, nested product, and label when available."""
     data = await Package.query.where(Package.package_ndc == package_ndc).first()
     if data:
         obj = data.to_json_dict()
@@ -84,6 +90,7 @@ async def package_ndc_obj(request, package_ndc):
 
 @blueprint.get('/label/product/<product_ndc>')
 async def label_product_ndc_obj(request, product_ndc):
+    """Return one product and its label when available."""
     data = await Product.query.where(Product.product_ndc == product_ndc).first()
     if data:
         obj = data.to_json_dict()
@@ -166,6 +173,7 @@ async def list_product_letter(request, letter, page=0, results_per_page = 100):
 @blueprint.get('/name/<product_name>/generic_products', name='product_data_by_generic_name')
 @blueprint.get('/name/<product_name>/brand_products', name='product_data_by_brand_name')
 async def product_data_by_name(request, product_name):
+    """Return matching generic and brand products for a decoded name."""
     product_name = urllib.parse.unquote(product_name).lower()
 
     #waiting for a fix with asyncpg to apply asyncio.gather!
@@ -192,6 +200,7 @@ async def product_data_by_name(request, product_name):
 @blueprint.get('/name/<product_name>/generic_packages', name='package_data_by_generic_name')
 @blueprint.get('/name/<product_name>/brand_packages', name='package_data_by_brand_name')
 async def package_data_by_name(request, product_name):
+    """Return matching generic and brand packages for a decoded name."""
 
     product_name = urllib.parse.unquote(product_name).lower()
 
@@ -216,6 +225,7 @@ async def package_data_by_name(request, product_name):
 
 @blueprint.get('/rxnorm/<rxnorm_id>/products')
 async def products_by_rxnorm(request, rxnorm_id):
+    """Return products linked to one RxNorm identifier."""
     rxnorm_id = rxnorm_id.strip()
     products = await get_products_by_rxnorm(rxnorm_id)
     if not products:
@@ -225,6 +235,7 @@ async def products_by_rxnorm(request, rxnorm_id):
 
 @blueprint.get('/rxnorm/<rxnorm_id>/packages')
 async def packages_by_rxnorm(request, rxnorm_id):
+    """Return packages linked to one RxNorm identifier."""
     rxnorm_id = rxnorm_id.strip()
     packages = await get_packages_by_rxnorm(rxnorm_id)
     if not packages:
@@ -234,40 +245,43 @@ async def packages_by_rxnorm(request, rxnorm_id):
 
 @blueprint.get('/rxnorm/<rxnorm_id>/conditions')
 async def conditions_by_rxnorm(request, rxnorm_id):
+    """Return condition evidence rows linked to one RxNorm identifier."""
     rxnorm_id = rxnorm_id.strip()
     limit = min(int(request.args.get('limit', 100)), 500)
-    data = []
-    q = DrugConditionEvidence.query.where(DrugConditionEvidence.rxnorm_ids.contains([rxnorm_id])).limit(limit)
+    evidence_rows = []
+    evidence_query = DrugConditionEvidence.query.where(DrugConditionEvidence.rxnorm_ids.contains([rxnorm_id])).limit(limit)
     async with db.transaction():
-        async for row in q.iterate():
-            data.append(row.to_json_dict())
-    if not data:
+        async for row in evidence_query.iterate():
+            evidence_rows.append(row.to_json_dict())
+    if not evidence_rows:
         raise sanic.exceptions.NotFound
-    return response.json(data)
+    return response.json(evidence_rows)
 
 
 @blueprint.get('/ndc/<product_ndc>/conditions')
 async def conditions_by_product_ndc(request, product_ndc):
+    """Return condition evidence rows linked to one product NDC."""
     product_ndc = product_ndc.strip()
     limit = min(int(request.args.get('limit', 100)), 500)
-    data = []
-    q = DrugConditionEvidence.query.where(DrugConditionEvidence.product_ndc.contains([product_ndc])).limit(limit)
+    evidence_rows = []
+    evidence_query = DrugConditionEvidence.query.where(DrugConditionEvidence.product_ndc.contains([product_ndc])).limit(limit)
     async with db.transaction():
-        async for row in q.iterate():
-            data.append(row.to_json_dict())
-    if not data:
+        async for row in evidence_query.iterate():
+            evidence_rows.append(row.to_json_dict())
+    if not evidence_rows:
         raise sanic.exceptions.NotFound
-    return response.json(data)
+    return response.json(evidence_rows)
 
 
 @blueprint.get('/label/<set_id>/condition-evidence')
 async def condition_evidence_by_label(request, set_id):
+    """Return condition evidence rows linked to one SPL set id."""
     set_id = set_id.strip()
-    data = []
-    q = DrugConditionEvidence.query.where(DrugConditionEvidence.set_id == set_id)
+    evidence_rows = []
+    evidence_query = DrugConditionEvidence.query.where(DrugConditionEvidence.set_id == set_id)
     async with db.transaction():
-        async for row in q.iterate():
-            data.append(row.to_json_dict())
-    if not data:
+        async for row in evidence_query.iterate():
+            evidence_rows.append(row.to_json_dict())
+    if not evidence_rows:
         raise sanic.exceptions.NotFound
-    return response.json(data)
+    return response.json(evidence_rows)

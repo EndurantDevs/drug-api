@@ -61,6 +61,7 @@ _IMPORTERS: dict[str, dict[str, Any]] = {
 
 
 def utc_now() -> datetime.datetime:
+    """Return the current UTC timestamp for import-control records."""
     return datetime.datetime.utcnow()
 
 
@@ -69,6 +70,7 @@ def _schema() -> str:
 
 
 async def ensure_import_run_table() -> None:
+    """Create the import-run state table and active-run idempotency index."""
     schema = _schema()
     await db.status(f"CREATE SCHEMA IF NOT EXISTS {schema};")
     await db.status(
@@ -108,6 +110,7 @@ async def ensure_import_run_table() -> None:
 
 
 def importer_registry() -> list[dict[str, Any]]:
+    """Return importers this service can expose to import-control clients."""
     return [
         {
             "name": name,
@@ -141,6 +144,7 @@ def _params_schema(name: str) -> list[dict[str, Any]]:
 
 
 def node_health() -> dict[str, Any]:
+    """Return runtime health, queue depth, and local worker status."""
     return {
         "engine": ENGINE_NAME,
         "node_id": os.getenv("HLTHPRT_IMPORT_NODE_ID"),
@@ -186,21 +190,22 @@ def _queue_depths() -> dict[str, int]:
         return {}
 
 
-async def create_import_run(payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    importer = str(payload.get("importer") or "").strip()
+async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Persist and enqueue one import run request."""
+    importer = str(run_request.get("importer") or "").strip()
     spec = _IMPORTERS.get(importer)
     if spec is None:
         raise ValueError(f"unknown importer: {importer}")
     await ensure_import_run_table()
     schema = _schema()
-    idempotency_key = str(payload.get("idempotency_key") or "").strip() or None
+    idempotency_key = str(run_request.get("idempotency_key") or "").strip() or None
     if idempotency_key:
         active = await _find_active_by_idempotency_key(idempotency_key)
         if active:
             return active, False
     now = utc_now()
-    run_id = str(payload.get("run_id") or "").strip() or f"run_{uuid.uuid4().hex}"
-    row = {
+    run_id = str(run_request.get("run_id") or "").strip() or f"run_{uuid.uuid4().hex}"
+    run_record_dict = {
         "run_id": run_id,
         "engine": ENGINE_NAME,
         "node_id": os.getenv("HLTHPRT_IMPORT_NODE_ID"),
@@ -208,20 +213,20 @@ async def create_import_run(payload: dict[str, Any]) -> tuple[dict[str, Any], bo
         "family": spec["family"],
         "status": "queued",
         "phase_detail": "created",
-        "params": payload.get("params") if isinstance(payload.get("params"), dict) else {},
+        "params": run_request.get("params") if isinstance(run_request.get("params"), dict) else {},
         "idempotency_key": idempotency_key,
-        "triggered_by": str(payload.get("triggered_by") or "api"),
-        "schedule_id": payload.get("schedule_id"),
+        "triggered_by": str(run_request.get("triggered_by") or "api"),
+        "schedule_id": run_request.get("schedule_id"),
         "created_at": now,
         "heartbeat_at": now,
         "progress": {"unit": "run", "total": 1, "done": 0, "pct": 0, "message": "queued"},
         "metrics": {},
         "error": None,
-        "import_id": payload.get("import_id"),
-        "retry_of_run_id": payload.get("retry_of_run_id"),
+        "import_id": run_request.get("import_id"),
+        "retry_of_run_id": run_request.get("retry_of_run_id"),
     }
     try:
-        db_row = {**row, **_json_fields(row)}
+        insert_values_dict = {**run_record_dict, **_json_fields(run_record_dict)}
         await db.status(
             text(
                 f"""
@@ -233,7 +238,7 @@ async def create_import_run(payload: dict[str, Any]) -> tuple[dict[str, Any], bo
                  :triggered_by, :schedule_id, :created_at, :heartbeat_at, :progress, :metrics, :error, :import_id, :retry_of_run_id)
             """
             ),
-            **db_row,
+            **insert_values_dict,
         )
     except IntegrityError:
         if idempotency_key:
@@ -241,8 +246,8 @@ async def create_import_run(payload: dict[str, Any]) -> tuple[dict[str, Any], bo
             if active:
                 return active, False
         raise
-    enqueue = await _enqueue(spec, row)
-    db_enqueue = {**enqueue, **_json_fields(enqueue)}
+    enqueue_update = await _enqueue(spec, run_record_dict)
+    update_values_dict = {**enqueue_update, **_json_fields(enqueue_update)}
     await db.status(
         text(
             f"""
@@ -253,21 +258,21 @@ async def create_import_run(payload: dict[str, Any]) -> tuple[dict[str, Any], bo
         """
         ),
         run_id=run_id,
-        **db_enqueue,
+        **update_values_dict,
     )
-    result = {**row, **enqueue}
-    enqueue_status_event(result)
-    _write_run_live_progress(result, publish_event=False)
-    return result, True
+    created_run_dict = {**run_record_dict, **enqueue_update}
+    enqueue_status_event(created_run_dict)
+    _write_run_live_progress(created_run_dict, publish_event=False)
+    return created_run_dict, True
 
 
-async def _enqueue(spec: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
-    params = row["params"] if isinstance(row.get("params"), dict) else {}
+async def _enqueue(spec: dict[str, Any], run_record_dict: dict[str, Any]) -> dict[str, Any]:
+    params = run_record_dict["params"] if isinstance(run_record_dict.get("params"), dict) else {}
     test_mode = bool(params.get("test_mode", params.get("test", False)))
-    task = {
-        "run_id": row["run_id"],
-        "importer": row.get("importer"),
-        "family": row.get("family"),
+    job_payload_dict = {
+        "run_id": run_record_dict["run_id"],
+        "importer": run_record_dict.get("importer"),
+        "family": run_record_dict.get("family"),
         "target_module": spec["target_module"],
         "target_function": spec["target_function"],
         "call_style": spec["call_style"],
@@ -280,38 +285,41 @@ async def _enqueue(spec: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
             job_serializer=msgpack.packb,
             job_deserializer=lambda b: msgpack.unpackb(b, raw=False),
         )
-        job = await redis.enqueue_job(spec["function"], task, _queue_name=spec["queue"])
+        job = await redis.enqueue_job(spec["function"], job_payload_dict, _queue_name=spec["queue"])
     except Exception as exc:
         return {"status": "failed", "phase_detail": "enqueue failed", "heartbeat_at": utc_now(), "progress": {"unit": "run", "total": 1, "done": 1, "pct": 100, "message": "enqueue failed"}, "metrics": {"queue": spec["queue"], "function": spec["function"]}, "error": {"code": "enqueue_failed", "message": str(exc)}}
     return {"status": "queued", "phase_detail": "enqueued", "heartbeat_at": utc_now(), "progress": {"unit": "run", "total": 1, "done": 0, "pct": 0, "message": "queued"}, "metrics": {"queue": spec["queue"], "function": spec["function"], "job_id": getattr(job, "job_id", None) or str(job)}, "error": None}
 
 
 async def list_import_runs(status: str | None = None, importer: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Return recent import runs, optionally filtered by status or importer."""
     await ensure_import_run_table()
     schema = _schema()
-    where = []
-    params: dict[str, Any] = {"limit": max(1, min(int(limit or 50), 200))}
+    where_clauses = []
+    query_params_dict: dict[str, Any] = {"limit": max(1, min(int(limit or 50), 200))}
     if status:
-        where.append("status = :status")
-        params["status"] = status
+        where_clauses.append("status = :status")
+        query_params_dict["status"] = status
     if importer:
-        where.append("importer = :importer")
-        params["importer"] = importer
+        where_clauses.append("importer = :importer")
+        query_params_dict["importer"] = importer
     sql = f"SELECT * FROM {schema}.import_run"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
+    if where_clauses:
+        sql += " WHERE " + " AND ".join(where_clauses)
     sql += " ORDER BY created_at DESC LIMIT :limit"
-    rows = await db.all(text(sql), **params)
-    return [_overlay_live_progress(_row_to_dict(row)) for row in rows]
+    rows = await db.all(text(sql), **query_params_dict)
+    return [_overlay_live_progress(_row_to_dict(run_row)) for run_row in rows]
 
 
 async def get_import_run(run_id: str) -> dict[str, Any] | None:
+    """Return one import run by id with live progress overlaid when available."""
     await ensure_import_run_table()
     row = await db.first(text(f"SELECT * FROM {_schema()}.import_run WHERE run_id = :run_id LIMIT 1"), run_id=run_id)
     return _overlay_live_progress(_row_to_dict(row)) if row else None
 
 
 async def request_cancel(run_id: str) -> dict[str, Any] | None:
+    """Request cancellation for a queued or actively cancelable import run."""
     run = await get_import_run(run_id)
     if not run:
         return None
@@ -322,8 +330,8 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
     now = utc_now()
     if run["status"] == "queued":
         cancel_signal = await _remove_queued_job(run)
-        progress = {"unit": "run", "total": 1, "done": 1, "pct": 100, "message": "canceled"}
-        metrics = {**(run.get("metrics") or {}), "cancel_signal": cancel_signal}
+        progress_payload_dict = {"unit": "run", "total": 1, "done": 1, "pct": 100, "message": "canceled"}
+        metrics_payload_dict = {**(run.get("metrics") or {}), "cancel_signal": cancel_signal}
         await db.status(
             text(
                 f"""
@@ -339,15 +347,15 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
             ),
             run_id=run_id,
             now=now,
-            progress=json.dumps(progress),
-            metrics=json.dumps(metrics),
+            progress=json.dumps(progress_payload_dict),
+            metrics=json.dumps(metrics_payload_dict),
         )
         updated = await get_import_run(run_id)
         if updated:
-            _write_run_live_progress({**updated, "progress": progress}, publish_event=False)
-            enqueue_status_event({**updated, "progress": progress, "metrics": metrics})
+            _write_run_live_progress({**updated, "progress": progress_payload_dict}, publish_event=False)
+            enqueue_status_event({**updated, "progress": progress_payload_dict, "metrics": metrics_payload_dict})
         return updated
-    progress = {"unit": "run", "total": 1, "done": 0, "pct": 0, "message": "cancel requested"}
+    progress_payload_dict = {"unit": "run", "total": 1, "done": 0, "pct": 0, "message": "cancel requested"}
     await db.status(
         text(
             f"""
@@ -359,12 +367,12 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
         ),
         run_id=run_id,
         now=now,
-        progress=json.dumps(progress),
+        progress=json.dumps(progress_payload_dict),
     )
     updated = await get_import_run(run_id)
     if updated:
-        _write_run_live_progress({**updated, "progress": progress}, publish_event=False)
-        enqueue_status_event({**updated, "progress": progress})
+        _write_run_live_progress({**updated, "progress": progress_payload_dict}, publish_event=False)
+        enqueue_status_event({**updated, "progress": progress_payload_dict})
     return updated
 
 
@@ -392,12 +400,18 @@ async def _remove_queued_job(run: dict[str, Any]) -> dict[str, Any]:
         return {"redis": False, "removed": False, "error": str(exc), "queue": queue, "job_id": job_id}
 
 
-async def retry_import_run(run_id: str, payload: dict[str, Any]) -> tuple[dict[str, Any], bool] | None:
+async def retry_import_run(run_id: str, retry_request: dict[str, Any]) -> tuple[dict[str, Any], bool] | None:
+    """Create a new import run from an existing run's importer and params."""
     current = await get_import_run(run_id)
     if not current:
         return None
-    retry_payload = {"importer": current["importer"], "params": current.get("params") or {}, "triggered_by": payload.get("triggered_by") or "api", "retry_of_run_id": run_id}
-    return await create_import_run(retry_payload)
+    retry_request_dict = {
+        "importer": current["importer"],
+        "params": current.get("params") or {},
+        "triggered_by": retry_request.get("triggered_by") or "api",
+        "retry_of_run_id": run_id,
+    }
+    return await create_import_run(retry_request_dict)
 
 
 async def _find_active_by_idempotency_key(idempotency_key: str) -> dict[str, Any] | None:
@@ -431,15 +445,15 @@ def _overlay_live_progress(data: dict[str, Any]) -> dict[str, Any]:
     live = read_live_progress(str(data.get("run_id") or ""))
     if not live:
         return data
-    result = dict(data)
-    result["progress"] = {**dict(result.get("progress") or {}), **progress_payload_from_live(live)}
+    run_payload_dict = dict(data)
+    run_payload_dict["progress"] = {**dict(run_payload_dict.get("progress") or {}), **progress_payload_from_live(live)}
     estimate = estimate_payload_from_live(live)
     if estimate:
-        result["estimate"] = estimate
-    phase = live.get("phase") or result.get("phase_detail")
+        run_payload_dict["estimate"] = estimate
+    phase = live.get("phase") or run_payload_dict.get("phase_detail")
     if phase:
-        result["phase_detail"] = str(phase)[:128]
-    return result
+        run_payload_dict["phase_detail"] = str(phase)[:128]
+    return run_payload_dict
 
 
 def _write_run_live_progress(run: dict[str, Any], *, publish_event: bool) -> None:
@@ -459,9 +473,9 @@ def _write_run_live_progress(run: dict[str, Any], *, publish_event: bool) -> Non
 
 
 def _json_fields(values: dict[str, Any]) -> dict[str, str | None]:
-    result: dict[str, str | None] = {}
+    encoded_fields_dict: dict[str, str | None] = {}
     for key in ("params", "progress", "metrics", "error"):
         if key in values:
             value = values[key]
-            result[key] = None if value is None else json.dumps(value)
-    return result
+            encoded_fields_dict[key] = None if value is None else json.dumps(value)
+    return encoded_fields_dict

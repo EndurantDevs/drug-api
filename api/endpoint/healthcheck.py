@@ -11,6 +11,7 @@ blueprint = Blueprint('healthcheck', url_prefix='/healthcheck', version=1)
 
 @blueprint.get('/')
 async def healthcheck(request):
+    """Return process metadata plus a simple database connectivity check."""
     data = {
         'date': datetime.utcnow().isoformat(),
         'release': request.app.config.get('RELEASE'),
@@ -22,6 +23,7 @@ async def healthcheck(request):
 
 
 async def _check_db():
+    """Probe the Product table to verify database access."""
     try:
         await Product.load(Product.product_id).limit(1).first()
         return {

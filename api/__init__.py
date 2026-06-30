@@ -7,7 +7,8 @@ from db.connection import db
 
 
 def init_api(api):
+    """Attach versioned API blueprints and shared database state to Sanic."""
     db.init_app(api)
-    api_bluenprint = Blueprint.group([v1_healthcheck, v1_drug], version_prefix="/api/v")
-    api.blueprint(api_bluenprint)
+    api_blueprint = Blueprint.group([v1_healthcheck, v1_drug], version_prefix="/api/v")
+    api.blueprint(api_blueprint)
     api.blueprint(control_blueprint)
