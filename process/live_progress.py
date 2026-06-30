@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import math
 import os
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -29,95 +30,113 @@ IMPORT_LIVE_PROGRESS_STALE_SECONDS = int(
 )
 
 _context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("import_live_progress_context", default={})
-_redis_client: redis.Redis | None = None
+
+
+@dataclass
+class _LiveProgressState:
+    redis_client: redis.Redis | None = None
+
+
+_live_progress_state = _LiveProgressState()
 
 
 def live_progress_key(run_id: str) -> str:
+    """Return the Redis key used to store live progress for a run."""
     return f"import:progress:{run_id}"
 
 
-def set_live_progress_context(**payload: Any) -> contextvars.Token:
-    data = {key: value for key, value in payload.items() if value not in (None, "")}
-    return _context.set(data)
+def set_live_progress_context(**progress_fields: Any) -> contextvars.Token:
+    """Set default live-progress fields for the current async context."""
+    context_fields_dict = {key: value for key, value in progress_fields.items() if value not in (None, "")}
+    return _context.set(context_fields_dict)
 
 
 def reset_live_progress_context(token: contextvars.Token) -> None:
+    """Restore the live-progress context to a previous token."""
     _context.reset(token)
 
 
 def current_live_progress_context() -> dict[str, Any]:
+    """Return a copy of the current async live-progress context."""
     return dict(_context.get() or {})
 
 
-def write_live_progress(**payload: Any) -> None:
+def write_live_progress(**progress_fields: Any) -> None:
+    """Write one live-progress payload to Redis and optionally publish an event."""
     context = current_live_progress_context()
-    run_id = str(payload.get("run_id") or context.get("run_id") or "").strip()
+    run_id = str(progress_fields.get("run_id") or context.get("run_id") or "").strip()
     if not run_id:
         return
 
     now = _utc_now()
-    merged = {
+    progress_record_dict = {
         "run_id": run_id,
-        "importer": payload.get("importer") or context.get("importer") or "unknown",
-        "status": payload.get("status") or context.get("status") or "running",
-        "source": payload.get("source") or context.get("source") or "import-live-progress",
-        "confidence": payload.get("confidence") or context.get("confidence") or "live",
+        "importer": progress_fields.get("importer") or context.get("importer") or "unknown",
+        "status": progress_fields.get("status") or context.get("status") or "running",
+        "source": progress_fields.get("source") or context.get("source") or "import-live-progress",
+        "confidence": progress_fields.get("confidence") or context.get("confidence") or "live",
         "updated_at": now.isoformat() + "Z",
         **{key: value for key, value in context.items() if key != "run_id"},
-        **{key: value for key, value in payload.items() if value is not None},
+        **{key: value for key, value in progress_fields.items() if value is not None},
     }
-    publish_event = bool(merged.pop("publish_event", True))
-    if _should_merge_previous(merged):
+    publish_event = bool(progress_record_dict.pop("publish_event", True))
+    if _should_merge_previous(progress_record_dict):
         previous = _read_live_progress_payload(run_id)
         if previous:
             for key in ("importer", "source", "confidence"):
-                if not merged.get(key) or merged.get(key) == "unknown":
-                    merged[key] = previous.get(key) or merged.get(key)
+                if not progress_record_dict.get(key) or progress_record_dict.get(key) == "unknown":
+                    progress_record_dict[key] = previous.get(key) or progress_record_dict.get(key)
             previous_started_at = _parse_datetime(previous.get("started_at"))
-            current_started_at = _parse_datetime(merged.get("started_at"))
+            current_started_at = _parse_datetime(progress_record_dict.get("started_at"))
             if previous_started_at is not None and (
                 current_started_at is None or previous_started_at <= current_started_at
             ):
-                merged["started_at"] = previous.get("started_at")
-    status = str(merged.get("status") or "").lower()
-    terminal = status in {"succeeded", "failed", "canceled", "cancelled", "dead_letter"}
-    _normalize_progress_fields(merged, terminal=terminal)
-    _normalize_estimate_fields(merged, now=now, terminal=terminal)
-    if "label" in merged:
-        merged["label"] = _safe_label(str(merged["label"]))
+                progress_record_dict["started_at"] = previous.get("started_at")
+    status = str(progress_record_dict.get("status") or "").lower()
+    is_terminal = status in {"succeeded", "failed", "canceled", "cancelled", "dead_letter"}
+    _normalize_progress_fields(progress_record_dict, terminal=is_terminal)
+    _normalize_estimate_fields(progress_record_dict, now=now, terminal=is_terminal)
+    if "label" in progress_record_dict:
+        progress_record_dict["label"] = _safe_label(str(progress_record_dict["label"]))
 
     if publish_event:
         enqueue_status_event(
             {
                 "run_id": run_id,
-                "importer": merged.get("importer"),
-                "status": merged.get("status") or "running",
-                "phase_detail": str(merged.get("phase") or "")[:128] or None,
-                "progress": progress_payload_from_live(merged),
-                "estimate": estimate_payload_from_live(merged),
-                "heartbeat_at": merged.get("updated_at"),
+                "importer": progress_record_dict.get("importer"),
+                "status": progress_record_dict.get("status") or "running",
+                "phase_detail": str(progress_record_dict.get("phase") or "")[:128] or None,
+                "progress": progress_payload_from_live(progress_record_dict),
+                "estimate": estimate_payload_from_live(progress_record_dict),
+                "heartbeat_at": progress_record_dict.get("updated_at"),
             }
         )
 
     try:
-        _redis().setex(live_progress_key(run_id), IMPORT_LIVE_PROGRESS_TTL_SECONDS, json.dumps(merged, default=str))
+        _redis().setex(
+            live_progress_key(run_id),
+            IMPORT_LIVE_PROGRESS_TTL_SECONDS,
+            json.dumps(progress_record_dict, default=str),
+        )
     except Exception:
         return
 
 
-def enqueue_live_progress(**payload: Any) -> None:
+def enqueue_live_progress(**progress_fields: Any) -> None:
+    """Schedule a live-progress write without blocking the current event loop."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        write_live_progress(**payload)
+        write_live_progress(**progress_fields)
         return
     try:
-        loop.create_task(asyncio.to_thread(write_live_progress, **payload))
+        loop.create_task(asyncio.to_thread(write_live_progress, **progress_fields))
     except Exception:
         return
 
 
 def read_live_progress(run_id: str) -> dict[str, Any] | None:
+    """Read fresh live progress for one import run, or return None."""
     run_id = str(run_id or "").strip()
     if not run_id:
         return None
@@ -149,7 +168,8 @@ def _read_live_progress_payload(run_id: str) -> dict[str, Any] | None:
 
 
 def progress_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    payload = {
+    """Convert a live-progress record into an import-run progress payload."""
+    progress_payload_dict = {
         "unit": live.get("unit") or "run",
         "done": live.get("done"),
         "total": live.get("total"),
@@ -158,26 +178,26 @@ def progress_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
         "phase": live.get("phase"),
         "updated_at": live.get("updated_at"),
     }
-    return {key: value for key, value in payload.items() if value is not None}
+    return {key: value for key, value in progress_payload_dict.items() if value is not None}
 
 
 def estimate_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
-    payload = {
+    """Convert a live-progress record into an ETA payload."""
+    estimate_payload_dict = {
         "eta_seconds": live.get("eta_seconds"),
         "estimated_finish_at": live.get("estimated_finish_at"),
         "confidence": live.get("confidence") or "live",
         "source": live.get("source") or "import-live-progress",
         "updated_at": live.get("updated_at"),
     }
-    return {key: value for key, value in payload.items() if value is not None}
+    return {key: value for key, value in estimate_payload_dict.items() if value is not None}
 
 
 def _redis() -> redis.Redis:
-    global _redis_client
-    if _redis_client is None:
+    if _live_progress_state.redis_client is None:
         dsn = os.getenv("HLTHPRT_REDIS_ADDRESS") or os.getenv("REDIS_URL") or "redis://127.0.0.1:6379/0"
-        _redis_client = redis.Redis.from_url(dsn, socket_connect_timeout=1.0, socket_timeout=1.0)
-    return _redis_client
+        _live_progress_state.redis_client = redis.Redis.from_url(dsn, socket_connect_timeout=1.0, socket_timeout=1.0)
+    return _live_progress_state.redis_client
 
 
 def _normalize_progress_fields(merged: dict[str, Any], *, terminal: bool) -> None:
