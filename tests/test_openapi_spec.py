@@ -19,7 +19,7 @@ def _collect_code_routes() -> set[tuple[str, str]]:
     routes = set()
     for path in ENDPOINT_DIR.glob("*.py"):
         tree = ast.parse(path.read_text())
-        prefixes = {}
+        prefixes_by_blueprint_dict = {}
         for node in tree.body:
             if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
                 continue
@@ -33,9 +33,9 @@ def _collect_code_routes() -> set[tuple[str, str]]:
                     prefix = _const_str(kwarg.value) or ""
                 if kwarg.arg == "version" and isinstance(kwarg.value, ast.Constant):
                     version = kwarg.value.value
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    prefixes[target.id] = (prefix, version)
+            for target_node in node.targets:
+                if isinstance(target_node, ast.Name):
+                    prefixes_by_blueprint_dict[target_node.id] = (prefix, version)
 
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -49,10 +49,10 @@ def _collect_code_routes() -> set[tuple[str, str]]:
                 if not isinstance(decorator.func.value, ast.Name):
                     continue
                 blueprint_name = decorator.func.value.id
-                if blueprint_name not in prefixes:
+                if blueprint_name not in prefixes_by_blueprint_dict:
                     continue
                 route = _const_str(decorator.args[0]) if decorator.args else ""
-                prefix, version = prefixes[blueprint_name]
+                prefix, version = prefixes_by_blueprint_dict[blueprint_name]
                 full_path = f"/api/v{version}{prefix}{route}"
                 full_path = re.sub(r"/+", "/", full_path)
                 full_path = re.sub(r"<([^>:]+)(?::[^>]+)?>", r"{\1}", full_path)

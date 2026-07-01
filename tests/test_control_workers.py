@@ -19,13 +19,13 @@ def test_drug_indications_worker_has_production_timeout():
 
 
 def test_ensure_worker_starts_registered_burst_worker(monkeypatch, tmp_path):
-    captured: dict[str, object] = {}
+    captured_process_dict: dict[str, object] = {}
 
     class FakeProcess:
         pid = 9876
 
     def fake_popen(cmd, *, cwd, env, stdout, stderr, start_new_session):
-        captured.update(
+        captured_process_dict.update(
             {
                 "cmd": cmd,
                 "cwd": cwd,
@@ -43,12 +43,12 @@ def test_ensure_worker_starts_registered_burst_worker(monkeypatch, tmp_path):
     monkeypatch.setattr(control_workers, "_pid_running", lambda pid: pid == FakeProcess.pid)
     monkeypatch.setattr(control_workers, "_pid_matches_current_node", lambda pid: True)
 
-    result = control_workers.ensure_worker({"importer": "drug-indications", "run_id": "run_1"})
+    ensure_result = control_workers.ensure_worker({"importer": "drug-indications", "run_id": "run_1"})
 
-    assert result["status"] == "started"
-    assert result["items"][0]["worker_class"] == "process.DrugIndications"
-    assert captured["cmd"][-2:] == ["process.DrugIndications", "--burst"]
-    assert captured["start_new_session"] is True
+    assert ensure_result["status"] == "started"
+    assert ensure_result["items"][0]["worker_class"] == "process.DrugIndications"
+    assert captured_process_dict["cmd"][-2:] == ["process.DrugIndications", "--burst"]
+    assert captured_process_dict["start_new_session"] is True
 
 
 def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
@@ -56,7 +56,7 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
 
     def fake_request(method, path, body=None):
         calls.append((method, path, body))
-        if method == "GET" and any(item[0] == "POST" for item in calls):
+        if method == "GET" and any(recorded_call[0] == "POST" for recorded_call in calls):
             return {
                 "items": [
                     {
@@ -79,9 +79,9 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "healthporta-dev")
     monkeypatch.setattr(control_workers, "_kubernetes_request", fake_request)
 
-    result = control_workers.ensure_worker({"importer": "ndc", "run_id": "run_123"})
+    ensure_result = control_workers.ensure_worker({"importer": "ndc", "run_id": "run_123"})
 
-    assert result["status"] == "started"
+    assert ensure_result["status"] == "started"
     post = next(call for call in calls if call[0] == "POST")
     job = post[2]
     assert post[1] == "/apis/batch/v1/namespaces/healthporta-dev/jobs"
@@ -104,7 +104,7 @@ def test_kubernetes_completed_worker_job_is_recreated(monkeypatch):
     def fake_request(method, path, body=None):
         calls.append((method, path, body))
         if method == "GET":
-            if any(item[0] == "POST" for item in calls):
+            if any(recorded_call[0] == "POST" for recorded_call in calls):
                 return {"items": [{"metadata": {"name": "worker-job"}, "status": {"active": 1}}]}
             return {"items": [{"metadata": {"name": "worker-job"}, "status": {"succeeded": 1}}]}
         return {}
@@ -116,9 +116,9 @@ def test_kubernetes_completed_worker_job_is_recreated(monkeypatch):
     monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "healthporta-dev")
     monkeypatch.setattr(control_workers, "_kubernetes_request", fake_request)
 
-    result = control_workers.ensure_worker({"importer": "drug-indications", "run_id": "run_123"})
+    ensure_result = control_workers.ensure_worker({"importer": "drug-indications", "run_id": "run_123"})
 
-    assert result["status"] == "started"
+    assert ensure_result["status"] == "started"
     assert any(call[0] == "DELETE" and call[1].endswith("/jobs/worker-job") for call in calls)
     assert any(call[0] == "POST" and call[1] == "/apis/batch/v1/namespaces/healthporta-dev/jobs" for call in calls)
 

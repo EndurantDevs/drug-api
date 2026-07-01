@@ -99,10 +99,10 @@ async def test_ndc_startup_creates_suffixed_product_and_package_tables(monkeypat
     monkeypatch.setattr(ndc_product, "db", fake_db)
     monkeypatch.setattr(ndc_product, "init_db", fake_init_db)
 
-    ctx = {}
-    await ndc_product.startup(ctx)
+    context_dict = {}
+    await ndc_product.startup(context_dict)
 
-    import_date = ctx["import_date"]
+    import_date = context_dict["import_date"]
     assert [table.name for table in fake_db.created_tables] == [
         f"product_{import_date}",
         f"package_{import_date}",
@@ -122,7 +122,7 @@ async def test_ndc_shutdown_publishes_suffixed_tables_inside_transactions(monkey
     monkeypatch.setattr(ndc_product, "mark_control_run", fake_mark_control_run)
     monkeypatch.setattr(ndc_product, "print_time_info", lambda *_args, **_kwargs: None)
 
-    ctx = {
+    context_dict = {
         "import_date": "20260213",
         "context": {
             "product_count": 100,
@@ -130,7 +130,7 @@ async def test_ndc_shutdown_publishes_suffixed_tables_inside_transactions(monkey
         },
     }
 
-    await ndc_product._shutdown_impl(ctx)
+    await ndc_product._shutdown_impl(context_dict)
 
     assert fake_db.events.count(("begin", None)) == 2
     assert fake_db.events.count(("commit", None)) == 2
@@ -150,10 +150,10 @@ async def test_label_startup_creates_suffixed_label_table(monkeypatch):
     monkeypatch.setattr(label, "db", fake_db)
     monkeypatch.setattr(label, "init_db", fake_init_db)
 
-    ctx = {}
-    await label.label_startup(ctx)
+    context_dict = {}
+    await label.label_startup(context_dict)
 
-    import_date = ctx["import_date"]
+    import_date = context_dict["import_date"]
     assert [table.name for table in fake_db.created_tables] == [f"label_{import_date}"]
     assert f"DROP TABLE IF EXISTS rx_data.label_{import_date};" in fake_db.statements
 
@@ -169,7 +169,7 @@ async def test_label_shutdown_publishes_suffixed_label_table_inside_transaction(
     monkeypatch.setattr(label, "mark_control_run", fake_mark_control_run)
     monkeypatch.setattr(label, "print_time_info", lambda *_args, **_kwargs: None)
 
-    ctx = {
+    context_dict = {
         "import_date": "20260213",
         "context": {
             "label_count": 25,
@@ -177,7 +177,7 @@ async def test_label_shutdown_publishes_suffixed_label_table_inside_transaction(
         },
     }
 
-    await label._label_shutdown_impl(ctx)
+    await label._label_shutdown_impl(context_dict)
 
     assert fake_db.events.count(("begin", None)) == 1
     assert fake_db.events.count(("commit", None)) == 1

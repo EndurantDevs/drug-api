@@ -64,12 +64,12 @@ def _pick_search_term(*values):
 
 @pytest.fixture(scope="session")
 def sample_catalog(api_get):
-    _, rows = api_get("/api/v1/drug/list-product/all/0/100")
-    assert isinstance(rows, list) and rows, "Expected non-empty /list-product/all response."
+    _, catalog_rows = api_get("/api/v1/drug/list-product/all/0/100")
+    assert isinstance(catalog_rows, list) and catalog_rows, "Expected non-empty /list-product/all response."
 
-    selected = None
-    for row in rows:
-        product_ndc = row.get("product_ndc")
+    selected_product_dict = None
+    for catalog_row in catalog_rows:
+        product_ndc = catalog_row.get("product_ndc")
         if not product_ndc:
             continue
 
@@ -82,17 +82,17 @@ def sample_catalog(api_get):
 
         rxnorm_ids = product.get("rxnorm_ids") or []
         rxnorm_id = str(rxnorm_ids[0]).strip() if rxnorm_ids else None
-        search_term = _pick_search_term(product.get("generic_name"), product.get("brand_name"), row.get("name"))
+        search_term = _pick_search_term(product.get("generic_name"), product.get("brand_name"), catalog_row.get("name"))
 
-        selected = {
+        selected_product_dict = {
             "product_ndc": product_ndc,
             "package_ndc": package_ndc,
             "rxnorm_id": rxnorm_id,
             "search_term": search_term,
-            "raw_name": row.get("name") or search_term,
+            "raw_name": catalog_row.get("name") or search_term,
         }
         if package_ndc and rxnorm_id:
             break
 
-    assert selected is not None, "Could not discover a product from list endpoints."
-    return selected
+    assert selected_product_dict is not None, "Could not discover a product from list endpoints."
+    return selected_product_dict

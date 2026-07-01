@@ -23,75 +23,75 @@ def _build_ndc_result(openfda):
 
 @pytest.mark.asyncio
 async def test_process_results_maps_openfda_rxcui_to_rxnorm_ids(monkeypatch):
-    captured = {}
+    captured_rows_by_table_dict = {}
 
     async def fake_push_objects(obj_list, cls):
-        captured[cls.__tablename__] = obj_list
+        captured_rows_by_table_dict[cls.__tablename__] = obj_list
 
     monkeypatch.setattr(ndc_product, "push_objects", fake_push_objects)
 
-    ctx = {"import_date": "20260213", "context": {"run": 0}}
-    task = {"results": [_build_ndc_result({"rxcui": [1791588, "1791593"]})]}
+    context_dict = {"import_date": "20260213", "context": {"run": 0}}
+    task_dict = {"results": [_build_ndc_result({"rxcui": [1791588, "1791593"]})]}
 
-    await ndc_product.process_results(ctx, task)
+    await ndc_product.process_results(context_dict, task_dict)
 
-    rows = captured["product_20260213"]
-    assert rows[0]["rxnorm_ids"] == ["1791588", "1791593"]
+    product_rows = captured_rows_by_table_dict["product_20260213"]
+    assert product_rows[0]["rxnorm_ids"] == ["1791588", "1791593"]
 
 
 @pytest.mark.asyncio
 async def test_process_results_sets_empty_rxnorm_ids_without_rxcui(monkeypatch):
-    captured = {}
+    captured_rows_by_table_dict = {}
 
     async def fake_push_objects(obj_list, cls):
-        captured[cls.__tablename__] = obj_list
+        captured_rows_by_table_dict[cls.__tablename__] = obj_list
 
     monkeypatch.setattr(ndc_product, "push_objects", fake_push_objects)
 
-    ctx = {"import_date": "20260213", "context": {"run": 0}}
-    task = {"results": [_build_ndc_result({})]}
+    context_dict = {"import_date": "20260213", "context": {"run": 0}}
+    task_dict = {"results": [_build_ndc_result({})]}
 
-    await ndc_product.process_results(ctx, task)
+    await ndc_product.process_results(context_dict, task_dict)
 
-    rows = captured["product_20260213"]
-    assert rows[0]["rxnorm_ids"] == []
+    product_rows = captured_rows_by_table_dict["product_20260213"]
+    assert product_rows[0]["rxnorm_ids"] == []
 
 
 @pytest.mark.asyncio
 async def test_process_results_sets_is_otc_true_from_marketing_category(monkeypatch):
-    captured = {}
+    captured_rows_by_table_dict = {}
 
     async def fake_push_objects(obj_list, cls):
-        captured[cls.__tablename__] = obj_list
+        captured_rows_by_table_dict[cls.__tablename__] = obj_list
 
     monkeypatch.setattr(ndc_product, "push_objects", fake_push_objects)
 
-    ctx = {"import_date": "20260213", "context": {"run": 0}}
-    row = _build_ndc_result({"rxcui": [1791588]})
-    row["marketing_category"] = "OTC Monograph Final"
-    task = {"results": [row]}
+    context_dict = {"import_date": "20260213", "context": {"run": 0}}
+    ndc_result_dict = _build_ndc_result({"rxcui": [1791588]})
+    ndc_result_dict["marketing_category"] = "OTC Monograph Final"
+    task_dict = {"results": [ndc_result_dict]}
 
-    await ndc_product.process_results(ctx, task)
+    await ndc_product.process_results(context_dict, task_dict)
 
-    rows = captured["product_20260213"]
-    assert rows[0]["is_otc"] is True
+    product_rows = captured_rows_by_table_dict["product_20260213"]
+    assert product_rows[0]["is_otc"] is True
 
 
 @pytest.mark.asyncio
 async def test_process_results_sets_is_otc_false_from_product_type(monkeypatch):
-    captured = {}
+    captured_rows_by_table_dict = {}
 
     async def fake_push_objects(obj_list, cls):
-        captured[cls.__tablename__] = obj_list
+        captured_rows_by_table_dict[cls.__tablename__] = obj_list
 
     monkeypatch.setattr(ndc_product, "push_objects", fake_push_objects)
 
-    ctx = {"import_date": "20260213", "context": {"run": 0}}
-    row = _build_ndc_result({"rxcui": [1791588]})
-    row["product_type"] = "HUMAN PRESCRIPTION DRUG"
-    task = {"results": [row]}
+    context_dict = {"import_date": "20260213", "context": {"run": 0}}
+    ndc_result_dict = _build_ndc_result({"rxcui": [1791588]})
+    ndc_result_dict["product_type"] = "HUMAN PRESCRIPTION DRUG"
+    task_dict = {"results": [ndc_result_dict]}
 
-    await ndc_product.process_results(ctx, task)
+    await ndc_product.process_results(context_dict, task_dict)
 
-    rows = captured["product_20260213"]
-    assert rows[0]["is_otc"] is False
+    product_rows = captured_rows_by_table_dict["product_20260213"]
+    assert product_rows[0]["is_otc"] is False

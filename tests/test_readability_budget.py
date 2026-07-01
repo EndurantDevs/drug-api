@@ -16,7 +16,7 @@ COMMENT_NOISE_FIXTURE = "# return" + " result"
 
 
 def _write_config(repo_root: Path) -> None:
-    config = {
+    config_dict = {
         "source_roots": ["pkg"],
         "include_suffixes": [".py"],
         "exclude_globs": [],
@@ -48,7 +48,7 @@ def _write_config(repo_root: Path) -> None:
             {"name": "python_noqa", "pattern": "#\\s*noqa\\b"},
         ],
     }
-    (repo_root / "readability-budget.json").write_text(json.dumps(config), encoding="utf-8")
+    (repo_root / "readability-budget.json").write_text(json.dumps(config_dict), encoding="utf-8")
 
 
 def _assert_issue_count(snapshot: dict, category: str, expected_count: int) -> None:
@@ -213,7 +213,7 @@ def test_readability_budget_does_not_parse_non_python_files(tmp_path):
         "fn main() {\n    println!(\"not python\");\n}\n",
         encoding="utf-8",
     )
-    config = {
+    config_dict = {
         "source_roots": ["pkg"],
         "include_suffixes": [".py", ".rs"],
         "exclude_globs": [],
@@ -224,9 +224,9 @@ def test_readability_budget_does_not_parse_non_python_files(tmp_path):
         },
         "inline_suppression_patterns": [],
     }
-    (repo_root / "readability-budget.json").write_text(json.dumps(config), encoding="utf-8")
+    (repo_root / "readability-budget.json").write_text(json.dumps(config_dict), encoding="utf-8")
 
-    snapshot = readability_budget.build_snapshot(repo_root, config)
+    snapshot = readability_budget.build_snapshot(repo_root, config_dict)
 
     _assert_issue_count(snapshot, "syntax_errors", 0)
 

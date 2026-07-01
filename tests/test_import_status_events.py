@@ -14,7 +14,7 @@ def test_status_event_noops_without_import_control_url(monkeypatch):
 
 
 def test_status_event_throttles_repeated_phase_but_allows_transition(monkeypatch):
-    queued = []
+    queued_events_list = []
 
     class FakeQueue:
         def __init__(self):
@@ -25,7 +25,7 @@ def test_status_event_throttles_repeated_phase_but_allows_transition(monkeypatch
 
         def put_nowait(self, item):
             self.items.append(item)
-            queued.append(item)
+            queued_events_list.append(item)
 
     fake_queue = FakeQueue()
     monkeypatch.setenv("HLTHPRT_IMPORT_CONTROL_URL", "http://import-control")
@@ -37,7 +37,7 @@ def test_status_event_throttles_repeated_phase_but_allows_transition(monkeypatch
     import_status_events.enqueue_status_event({"run_id": "run_1", "status": "running", "phase_detail": "download"})
     import_status_events.enqueue_status_event({"run_id": "run_1", "status": "running", "phase_detail": "publish"})
 
-    assert [item["phase_detail"] for item in queued] == ["download", "publish"]
+    assert [event_dict["phase_detail"] for event_dict in queued_events_list] == ["download", "publish"]
 
 
 def test_live_progress_writes_redis_ttl_and_estimate(monkeypatch):
@@ -65,16 +65,16 @@ def test_live_progress_writes_redis_ttl_and_estimate(monkeypatch):
 
     assert writes[0][0] == "import:progress:run_ndc"
     assert writes[0][1] == live_progress.IMPORT_LIVE_PROGRESS_TTL_SECONDS
-    payload = json.loads(writes[0][2])
-    assert payload["pct"] == 50
-    assert payload["eta_seconds"] == 20
+    progress_payload_dict = json.loads(writes[0][2])
+    assert progress_payload_dict["pct"] == 50
+    assert progress_payload_dict["eta_seconds"] == 20
     assert events[0]["importer"] == "ndc"
     assert events[0]["estimate"]["eta_seconds"] == 20
 
 
 def test_live_progress_preserves_earliest_started_at(monkeypatch):
     writes = []
-    previous = {
+    previous_progress_dict = {
         "run_id": "run_ndc",
         "importer": "ndc",
         "status": "running",
@@ -85,7 +85,7 @@ def test_live_progress_preserves_earliest_started_at(monkeypatch):
     class FakeRedis:
         def get(self, key):
             assert key == "import:progress:run_ndc"
-            return json.dumps(previous).encode("utf-8")
+            return json.dumps(previous_progress_dict).encode("utf-8")
 
         def setex(self, key, ttl, value):
             writes.append((key, ttl, value))
@@ -104,8 +104,8 @@ def test_live_progress_preserves_earliest_started_at(monkeypatch):
         message="parsing",
     )
 
-    payload = json.loads(writes[0][2])
-    assert payload["started_at"] == previous["started_at"]
+    progress_payload_dict = json.loads(writes[0][2])
+    assert progress_payload_dict["started_at"] == previous_progress_dict["started_at"]
 
 
 def test_control_imports_overlay_live_progress_for_active_run(monkeypatch):
