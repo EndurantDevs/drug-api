@@ -218,6 +218,9 @@ def _is_boolean_method_name(name: str) -> bool:
         "isspace",
         "istitle",
         "isupper",
+        "empty",
+        "full",
+        "in_transaction",
         "startswith",
         "endswith",
     }
@@ -564,6 +567,10 @@ class FunctionVisitor(ast.NodeVisitor):
         relative: str,
     ) -> None:
         if self._has_only_boolean_returns(node):
+            if node.name.startswith("__") and node.name.endswith("__"):
+                return
+            if _is_boolean_method_name(node.name):
+                return
             boolean_prefixes = _name_prefixes(self.config, "boolean_prefixes", DEFAULT_BOOLEAN_PREFIXES)
             if not _has_boolean_prefix(node.name, boolean_prefixes):
                 self.issues.append(
@@ -891,7 +898,11 @@ class FunctionVisitor(ast.NodeVisitor):
         """Return true when a function annotation or all returns are boolean."""
         if isinstance(node.returns, ast.Name) and node.returns.id == "bool":
             return True
-        returns = [child.value for child in ast.walk(node) if isinstance(child, ast.Return) and child.value is not None]
+        returns = [
+            child.value
+            for child in _iter_without_nested_scopes(node)
+            if isinstance(child, ast.Return) and child.value is not None
+        ]
         return bool(returns) and all(_is_bool_expression(value) for value in returns)
 
     def _parameter_count(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:

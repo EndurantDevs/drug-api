@@ -11,7 +11,7 @@ def test_name_search_subqueries_compile_with_sqlalchemy_adapter():
     subq = db.select([Product.product_ndc]).select_from(Product).where(
         Product.generic_name.in_(low_subq.statement) & (
             (db.func.lower(Product.generic_name) == db.func.lower(Product.brand_name)) |
-            (Product.brand_name == None)
+            Product.brand_name.is_(None)
         )
     )
 
