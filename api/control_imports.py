@@ -13,6 +13,7 @@ from arq import create_pool
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from api.control_run_store import insert_import_run, update_import_run_after_enqueue
 from db.models import db
 from process.import_status_events import enqueue_status_event
 from process.live_progress import (enqueue_live_progress, estimate_payload_from_live, progress_payload_from_live,
@@ -205,7 +206,32 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
             return active, False
     now = utc_now()
     run_id = str(run_request.get("run_id") or "").strip() or f"run_{uuid.uuid4().hex}"
-    run_record_dict = {
+    run_record_dict = _run_record_from_request(run_request, importer, spec, run_id, idempotency_key, now)
+    try:
+        await insert_import_run(schema, run_record_dict)
+    except IntegrityError:
+        if idempotency_key:
+            active = await _find_active_by_idempotency_key(idempotency_key)
+            if active:
+                return active, False
+        raise
+    enqueue_update = await _enqueue(spec, run_record_dict)
+    await update_import_run_after_enqueue(schema, run_id, enqueue_update)
+    created_run_dict = {**run_record_dict, **enqueue_update}
+    enqueue_status_event(created_run_dict)
+    _write_run_live_progress(created_run_dict, publish_event=False)
+    return created_run_dict, True
+
+
+def _run_record_from_request(
+    run_request: dict[str, Any],
+    importer: str,
+    spec: dict[str, Any],
+    run_id: str,
+    idempotency_key: str | None,
+    now: datetime.datetime,
+) -> dict[str, Any]:
+    return {
         "run_id": run_id,
         "engine": ENGINE_NAME,
         "node_id": os.getenv("HLTHPRT_IMPORT_NODE_ID"),
@@ -225,45 +251,6 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
         "import_id": run_request.get("import_id"),
         "retry_of_run_id": run_request.get("retry_of_run_id"),
     }
-    try:
-        insert_values_dict = {**run_record_dict, **_json_fields(run_record_dict)}
-        await db.status(
-            text(
-                f"""
-            INSERT INTO {schema}.import_run
-                (run_id, engine, node_id, importer, family, status, phase_detail, params, idempotency_key,
-                 triggered_by, schedule_id, created_at, heartbeat_at, progress, metrics, error, import_id, retry_of_run_id)
-            VALUES
-                (:run_id, :engine, :node_id, :importer, :family, :status, :phase_detail, :params, :idempotency_key,
-                 :triggered_by, :schedule_id, :created_at, :heartbeat_at, :progress, :metrics, :error, :import_id, :retry_of_run_id)
-            """
-            ),
-            **insert_values_dict,
-        )
-    except IntegrityError:
-        if idempotency_key:
-            active = await _find_active_by_idempotency_key(idempotency_key)
-            if active:
-                return active, False
-        raise
-    enqueue_update = await _enqueue(spec, run_record_dict)
-    update_values_dict = {**enqueue_update, **_json_fields(enqueue_update)}
-    await db.status(
-        text(
-            f"""
-        UPDATE {schema}.import_run
-           SET status = :status, phase_detail = :phase_detail, heartbeat_at = :heartbeat_at,
-               progress = :progress, metrics = :metrics, error = :error
-         WHERE run_id = :run_id
-        """
-        ),
-        run_id=run_id,
-        **update_values_dict,
-    )
-    created_run_dict = {**run_record_dict, **enqueue_update}
-    enqueue_status_event(created_run_dict)
-    _write_run_live_progress(created_run_dict, publish_event=False)
-    return created_run_dict, True
 
 
 async def _enqueue(spec: dict[str, Any], run_record_dict: dict[str, Any]) -> dict[str, Any]:
@@ -470,12 +457,3 @@ def _write_run_live_progress(run: dict[str, Any], *, publish_event: bool) -> Non
     payload.setdefault("phase", run.get("phase_detail"))
     payload.setdefault("message", run.get("phase_detail"))
     enqueue_live_progress(**payload)
-
-
-def _json_fields(values: dict[str, Any]) -> dict[str, str | None]:
-    encoded_fields_dict: dict[str, str | None] = {}
-    for key in ("params", "progress", "metrics", "error"):
-        if key in values:
-            value = values[key]
-            encoded_fields_dict[key] = None if value is None else json.dumps(value)
-    return encoded_fields_dict
