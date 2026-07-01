@@ -114,6 +114,29 @@ async def download_label_content(ctx, task):
     return 1
 
 
+def _label_row_dict_from_record(label_record: dict, label_columns: list[str]) -> dict[str, object]:
+    label_row_dict: dict[str, object] = {}
+    for label_column in label_columns:
+        if label_column == 'openfda':
+            openfda_dict = label_record.get(label_column, {})
+            label_row_dict['product_ndc'] = openfda_dict.get('product_ndc', [])
+            label_row_dict['package_ndc'] = openfda_dict.get('package_ndc', [])
+            continue
+        label_row_dict[label_column] = _label_column_value(label_record, label_column)
+    return label_row_dict
+
+
+def _label_column_value(label_record: dict, label_column: str) -> object:
+    raw_value = label_record.get(label_column)
+    if ("_date" in label_column) and raw_value:
+        return parse_date(raw_value, fuzzy=True)
+    if isinstance(raw_value, list):
+        return ('\n'.join(raw_value)).strip()
+    if raw_value:
+        return raw_value
+    return None
+
+
 async def process_label_results(ctx, task):
     """Normalize FDA label records and insert them into the dated import table."""
     import_date = ctx['import_date']
@@ -121,24 +144,8 @@ async def process_label_results(ctx, task):
     run_id = task.get('run_id') or ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
     mylabel = make_class(Label, import_date)
 
-    label_rows = []
-
     label_columns = [column.name for column in inspect(mylabel).c]
-    for label_record in task['results']:
-        label_row_dict = {}
-        for col in label_columns:
-            if ("_date" in col) and label_record.get(col):
-                label_row_dict[col] = parse_date(label_record.get(col), fuzzy=True)
-            elif col == 'openfda':
-                label_row_dict['product_ndc'] = label_record.get(col, {}).get('product_ndc', [])
-                label_row_dict['package_ndc'] = label_record.get(col, {}).get('package_ndc', [])
-            elif isinstance(label_record.get(col), list):
-                label_row_dict[col] = ('\n'.join(label_record.get(col))).strip()
-            elif label_record.get(col):
-                label_row_dict[col] = label_record.get(col)
-            elif col not in label_row_dict:
-                label_row_dict[col] = None
-        label_rows.append(label_row_dict)
+    label_rows = [_label_row_dict_from_record(label_record, label_columns) for label_record in task['results']]
 
     await push_objects(label_rows, mylabel)
     enqueue_live_progress(
