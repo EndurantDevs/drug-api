@@ -217,25 +217,16 @@ async def mark_control_run(
         return
     await ensure_import_run_table()
     schema = os.getenv("DB_SCHEMA") or "rx_data"
-    now = datetime.datetime.utcnow()
-    finished_at = now if status in {"succeeded", "failed", "canceled", "dead_letter"} else None
-    started_at = None
-    if status == "running":
-        started_at = now
     progress_payload_dict = progress or _default_progress_payload(status, progress_message)
-    transition = ControlRunTransition(
+    transition = _run_transition_from_status(
         run_id=run_id,
         status=status,
         phase_detail=phase_detail,
         progress_message=progress_message,
         metrics=metrics,
         error=error,
-        now=now,
-        started_at=started_at,
-        finished_at=finished_at,
     )
-    should_guard_status_update = status in {"running", "succeeded", "failed", "dead_letter"}
-    cancel_guard = "AND status NOT IN ('canceling', 'canceled')" if should_guard_status_update else ""
+    cancel_guard = _cancel_guard_for_status(status)
     await db.status(
         text(
             f"""
@@ -255,9 +246,9 @@ async def mark_control_run(
         run_id=run_id,
         status=status,
         phase_detail=phase_detail,
-        started_at=started_at,
-        heartbeat_at=now,
-        finished_at=finished_at,
+        started_at=transition.started_at,
+        heartbeat_at=transition.now,
+        finished_at=transition.finished_at,
         progress=json.dumps(progress_payload_dict),
         metrics=None if metrics is None else json.dumps(metrics),
         error=None if error is None else json.dumps(error),
@@ -266,6 +257,37 @@ async def mark_control_run(
         **_live_progress_payload(progress_payload_dict, transition)
     )
     enqueue_status_event(_status_event_payload(progress_payload_dict, transition))
+
+
+def _run_transition_from_status(
+    *,
+    run_id: str,
+    status: str,
+    phase_detail: str,
+    progress_message: str,
+    metrics: dict[str, Any] | None,
+    error: dict[str, Any] | None,
+) -> ControlRunTransition:
+    now = datetime.datetime.utcnow()
+    finished_at = now if status in {"succeeded", "failed", "canceled", "dead_letter"} else None
+    started_at = now if status == "running" else None
+    return ControlRunTransition(
+        run_id=run_id,
+        status=status,
+        phase_detail=phase_detail,
+        progress_message=progress_message,
+        metrics=metrics,
+        error=error,
+        now=now,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+
+def _cancel_guard_for_status(status: str) -> str:
+    if status in {"running", "succeeded", "failed", "dead_letter"}:
+        return "AND status NOT IN ('canceling', 'canceled')"
+    return ""
 
 
 def _default_progress_payload(status: str, progress_message: str) -> dict[str, Any]:
