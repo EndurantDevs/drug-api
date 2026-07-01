@@ -18,6 +18,7 @@ from db.connection import init_db
 from db.models import Label, db
 from process.control_lifecycle import mark_control_run
 from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
+from process.label_publish import publish_label_table
 from process.live_progress import enqueue_live_progress
 from process.redis_config import redis_settings
 
@@ -200,79 +201,7 @@ async def _label_shutdown_impl(ctx):
     """Validate the label import count, swap tables, and report final status."""
     import_date = ctx['import_date']
     control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
-    if ctx['context'].get('label_count'):
-        mylabel = make_class(Label, import_date)
-        import_mylabel_count = await db.select(db.func.count(mylabel.id)).scalar()
-        if import_mylabel_count == ctx['context']['label_count']:
-            db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
-            for table in ['label']:
-                async with db.transaction():
-                    print('Creating indexes..')
-                    await db.status(
-                        f"CREATE INDEX idx_product_ndc_{import_date} ON "
-                        f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
-                    await db.status(
-                        f"CREATE INDEX idx_package_ndc_{import_date} ON "
-                        f"{db_schema}.{table}_{import_date} USING GIN(package_ndc);")
-                    await db.status(
-                        f"CREATE INDEX idx_label_id_{import_date} ON "
-                        f"{db_schema}.{table}_{import_date} (id);")
-                    await db.status(
-                        f"CREATE INDEX idx_label_set_id_{import_date} ON "
-                        f"{db_schema}.{table}_{import_date} (set_id);")
-
-                    await db.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
-
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_product_ndc RENAME TO idx_product_ndc_old;")
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_package_ndc RENAME TO idx_package_ndc_old;")
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_label_id RENAME TO idx_label_id_old;")
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_label_set_id RENAME TO idx_label_set_id_old;")
-                    await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table} RENAME TO {table}_old;")
-
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_product_ndc_{import_date} RENAME TO idx_product_ndc;")
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_package_ndc_{import_date} RENAME TO idx_package_ndc;")
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_label_id_{import_date} RENAME TO idx_label_id;")
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.idx_label_set_id_{import_date} RENAME TO idx_label_set_id;")
-                    await db.status(f"ALTER TABLE IF EXISTS "
-                                    f"{db_schema}.{table}_{import_date} RENAME TO {table};")
-
-            print('Labeling rows in JSON:', ctx['context']['label_count'])
-            print('Labling rows in DB: ', await db.select(db.func.count(Label.id)).scalar())
-            print_time_info(ctx['context']['start'])
-            await mark_control_run(
-                control_run_id,
-                status="succeeded",
-                phase_detail="label import published",
-                progress_message="succeeded",
-                metrics={"source_label_count": ctx['context']['label_count'], "imported_label_count": import_mylabel_count},
-                progress={
-                    "unit": "records",
-                    "total": ctx['context']['label_count'],
-                    "done": import_mylabel_count,
-                    "pct": 100,
-                    "message": "succeeded",
-                    "phase": "label import published",
-                },
-            )
-        else:
-            print(f"Aborted: Imported rows Number differs from FDA rows number! "
-                  f"(JSON: {ctx['context']['label_count']}, DB: {import_mylabel_count})")
-            await mark_control_run(
-                control_run_id,
-                status="failed",
-                phase_detail="label import validation failed",
-                progress_message="failed",
-                error={"code": "validation_failed", "message": "imported label count does not match source count"},
-            )
-    else:
+    if not ctx['context'].get('label_count'):
         print('Labeling import failed')
         await mark_control_run(
             control_run_id,
@@ -281,6 +210,52 @@ async def _label_shutdown_impl(ctx):
             progress_message="failed",
             error={"code": "import_failed", "message": "label_count was not set"},
         )
+        return
+
+    mylabel = make_class(Label, import_date)
+    imported_label_count = await db.select(db.func.count(mylabel.id)).scalar()
+    expected_label_count = ctx['context']['label_count']
+    if imported_label_count != expected_label_count:
+        print(f"Aborted: Imported rows Number differs from FDA rows number! "
+              f"(JSON: {expected_label_count}, DB: {imported_label_count})")
+        await mark_control_run(
+            control_run_id,
+            status="failed",
+            phase_detail="label import validation failed",
+            progress_message="failed",
+            error={"code": "validation_failed", "message": "imported label count does not match source count"},
+        )
+        return
+
+    db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
+    await publish_label_table(db, db_schema, import_date)
+    await _mark_label_success(ctx, control_run_id, expected_label_count, imported_label_count)
+
+
+async def _mark_label_success(
+    ctx: dict,
+    control_run_id: str | None,
+    expected_label_count: int,
+    imported_label_count: int,
+) -> None:
+    print('Labeling rows in JSON:', expected_label_count)
+    print('Labling rows in DB: ', await db.select(db.func.count(Label.id)).scalar())
+    print_time_info(ctx['context']['start'])
+    await mark_control_run(
+        control_run_id,
+        status="succeeded",
+        phase_detail="label import published",
+        progress_message="succeeded",
+        metrics={"source_label_count": expected_label_count, "imported_label_count": imported_label_count},
+        progress={
+            "unit": "records",
+            "total": expected_label_count,
+            "done": imported_label_count,
+            "pct": 100,
+            "message": "succeeded",
+            "phase": "label import published",
+        },
+    )
 
 
 async def init_label_file(ctx, task=None):
