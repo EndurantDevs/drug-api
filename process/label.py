@@ -31,6 +31,7 @@ LABEL_QUEUE_NAME = (
 
 
 async def download_label_content(ctx, task):
+    """Download one FDA label partition and enqueue parse batches."""
     redis = ctx['redis']
     max_records = int(task.get('max_records') or 0)
     run_id = task.get('run_id') or ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
@@ -61,7 +62,7 @@ async def download_label_content(ctx, task):
             counter = 0
             read_counter = 0
             send_counter = 0
-            batch_task = {
+            batch_task_dict = {
                 'what': task.get('what'),
                 'model': 'label',
                 'results': [],
@@ -69,15 +70,15 @@ async def download_label_content(ctx, task):
                 'partition_records': partition_records,
             }
 
-            async for res in ijson.items(afp, 'results.item'):
-                batch_task['results'].append(res)
+            async for label_record in ijson.items(afp, 'results.item'):
+                batch_task_dict['results'].append(label_record)
                 read_counter += 1
                 if max_records and read_counter >= max_records:
                     break
                 if counter == int(os.environ.get('SAVE_PER_PACK', 100)):
-                    batch_task['batch_end'] = read_counter
-                    await redis.enqueue_job('process_label_results', batch_task)
-                    batch_task = {
+                    batch_task_dict['batch_end'] = read_counter
+                    await redis.enqueue_job('process_label_results', batch_task_dict)
+                    batch_task_dict = {
                         'what': task.get('what'),
                         'model': 'label',
                         'results': [],
@@ -97,8 +98,8 @@ async def download_label_content(ctx, task):
                         message=f"parsed {read_counter} labels",
                     )
                 counter += 1
-            batch_task['batch_end'] = read_counter
-            await redis.enqueue_job('process_label_results', batch_task)
+            batch_task_dict['batch_end'] = read_counter
+            await redis.enqueue_job('process_label_results', batch_task_dict)
             enqueue_live_progress(
                 run_id=run_id,
                 importer="label",
@@ -114,31 +115,32 @@ async def download_label_content(ctx, task):
 
 
 async def process_label_results(ctx, task):
+    """Normalize FDA label records and insert them into the dated import table."""
     import_date = ctx['import_date']
     ctx['context']['run'] += 1
     run_id = task.get('run_id') or ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
     mylabel = make_class(Label, import_date)
 
-    obj_list = []
+    label_rows = []
 
-    product_columns = [column.name for column in inspect(mylabel).c]
-    for res in task['results']:
-        obj = {}
-        for col in product_columns:
-            if ("_date" in col) and res.get(col):
-                obj[col] = parse_date(res.get(col), fuzzy=True)
+    label_columns = [column.name for column in inspect(mylabel).c]
+    for label_record in task['results']:
+        label_row_dict = {}
+        for col in label_columns:
+            if ("_date" in col) and label_record.get(col):
+                label_row_dict[col] = parse_date(label_record.get(col), fuzzy=True)
             elif col == 'openfda':
-                obj['product_ndc'] = res.get(col, {}).get('product_ndc', [])
-                obj['package_ndc'] = res.get(col, {}).get('package_ndc', [])
-            elif isinstance(res.get(col), list):
-                obj[col] = ('\n'.join(res.get(col))).strip()
-            elif res.get(col):
-                obj[col] = res.get(col)
-            elif col not in obj:
-                obj[col] = None
-        obj_list.append(obj)
+                label_row_dict['product_ndc'] = label_record.get(col, {}).get('product_ndc', [])
+                label_row_dict['package_ndc'] = label_record.get(col, {}).get('package_ndc', [])
+            elif isinstance(label_record.get(col), list):
+                label_row_dict[col] = ('\n'.join(label_record.get(col))).strip()
+            elif label_record.get(col):
+                label_row_dict[col] = label_record.get(col)
+            elif col not in label_row_dict:
+                label_row_dict[col] = None
+        label_rows.append(label_row_dict)
 
-    await push_objects(obj_list, mylabel)
+    await push_objects(label_rows, mylabel)
     enqueue_live_progress(
         run_id=run_id,
         importer="label",
@@ -147,11 +149,12 @@ async def process_label_results(ctx, task):
         unit="records",
         done=task.get('batch_end') or len(task.get('results') or []),
         total=task.get('partition_records') or None,
-        message=f"saved {len(obj_list)} labels",
+        message=f"saved {len(label_rows)} labels",
     )
 
 
 async def label_startup(ctx):
+    """Prepare the dated label import table before workers start."""
     loop = asyncio.get_event_loop()
     ctx['context'] = {}
     ctx['context']['start'] = datetime.datetime.now()
@@ -168,6 +171,7 @@ async def label_startup(ctx):
 
 
 async def label_shutdown(ctx):
+    """Publish or fail the label import and mark the control run."""
     try:
         await _label_shutdown_impl(ctx)
     except Exception as exc:
@@ -186,6 +190,7 @@ async def label_shutdown(ctx):
 
 
 async def _label_shutdown_impl(ctx):
+    """Validate the label import count, swap tables, and report final status."""
     import_date = ctx['import_date']
     control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
     if ctx['context'].get('label_count'):
@@ -272,6 +277,7 @@ async def _label_shutdown_impl(ctx):
 
 
 async def init_label_file(ctx, task=None):
+    """Load the FDA label manifest and enqueue one task per selected partition."""
     task = task if isinstance(task, dict) else {}
     if task.get('run_id'):
         ctx['control_run_id'] = task.get('run_id')
@@ -284,13 +290,13 @@ async def init_label_file(ctx, task=None):
                               job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
 
     response_content = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
-    obj = loads(response_content.content)
-    partitions = list(obj['results']['drug']['label']['partitions'])
+    manifest_dict = loads(response_content.content)
+    partitions = list(manifest_dict['results']['drug']['label']['partitions'])
     if test_mode:
         partitions = partitions[:1]
         ctx['context']['label_count'] = min(max_records, int(partitions[0].get('records') or max_records)) if partitions else 0
     else:
-        ctx['context']['label_count'] = obj['results']['drug']['label']['total_records']
+        ctx['context']['label_count'] = manifest_dict['results']['drug']['label']['total_records']
     print(f"Going to import {ctx['context']['label_count']} rows")
     control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
     await mark_control_run(
@@ -308,7 +314,7 @@ async def init_label_file(ctx, task=None):
         },
     )
     for partition_index, part in enumerate(partitions, start=1):
-        payload = {
+        partition_task_dict = {
             'what': 'label',
             'file': part['file'],
             'run_id': control_run_id,
@@ -317,11 +323,12 @@ async def init_label_file(ctx, task=None):
             'partition_count': len(partitions),
         }
         if test_mode:
-            payload['max_records'] = max_records
-        await redis.enqueue_job('download_label_content', payload)
+            partition_task_dict['max_records'] = max_records
+        await redis.enqueue_job('download_label_content', partition_task_dict)
 
 
 async def main():
+    """Enqueue the default label import manifest task."""
     redis = await create_pool(redis_settings(),
                               default_queue_name=LABEL_QUEUE_NAME,
                               job_serializer=msgpack.packb,
