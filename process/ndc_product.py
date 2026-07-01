@@ -3,25 +3,21 @@ import datetime
 import logging
 import os
 import re
-import tempfile
 from json import loads
-from pathlib import Path, PurePath
 from typing import Optional
 
-import ijson
 import msgpack
-from aiofile import async_open
 from arq import create_pool
-from async_unzip import unzip
 from dateutil.parser import parse as parse_date
 from sqlalchemy.inspection import inspect
 
 from db.connection import init_db
 from db.models import Package, Product, db
 from process.control_lifecycle import mark_control_run
-from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
+from process.ext.utils import download_it, make_class, print_time_info, push_objects
 from process.live_progress import enqueue_live_progress
 from process.ndc_publish import publish_ndc_tables
+from process.partition_download import PartitionDownloadSpec, download_partition_content
 from process.redis_config import redis_settings
 
 logger = logging.getLogger(__name__)
@@ -31,6 +27,13 @@ NDC_QUEUE_NAME = (
     os.environ.get('HLTHPRT_ARQ_QUEUE_NDC')
     or os.environ.get('ARQ_QUEUE_NDC')
     or 'arq:queue:drug-api-import-ndc'
+)
+NDC_DOWNLOAD_SPEC = PartitionDownloadSpec(
+    importer="ndc",
+    model="product",
+    result_job_name="process_results",
+    start_message="Starting NDC data download: ",
+    item_label="records",
 )
 
 
@@ -143,87 +146,7 @@ def _package_row_dict_from_record(
 
 async def download_content(ctx, task):
     """Download one FDA NDC partition and enqueue product parse batches."""
-    redis = ctx['redis']
-    max_records = int(task.get('max_records') or 0)
-    run_id = task.get('run_id') or ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
-    partition_records = int(task.get('partition_records') or max_records or 0)
-    partition_index = int(task.get('partition_index') or 1)
-    partition_count = int(task.get('partition_count') or 1)
-    print('Starting NDC data download: ', task.get('file'))
-    enqueue_live_progress(
-        run_id=run_id,
-        importer="ndc",
-        status="running",
-        phase="ndc downloading partition",
-        unit="partitions",
-        done=max(partition_index - 1, 0),
-        total=partition_count,
-        message=f"downloading partition {partition_index}/{partition_count}",
-    )
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        archive_path = Path(task.get('file'))
-        tmp_filename = str(PurePath(str(tmpdirname), archive_path.name))
-        json_tmp_file = str(PurePath(str(tmpdirname), archive_path.stem))
-
-        await download_it_and_save(task.get('file'), tmp_filename)
-
-        await unzip(tmp_filename, tmpdirname)
-
-        async with async_open(json_tmp_file, 'r') as afp:
-            counter = 0
-            read_counter = 0
-            send_counter = 0
-            batch_task_dict = {
-                'what': task.get('what'),
-                'model': 'product',
-                'results': [],
-                'run_id': run_id,
-                'partition_records': partition_records,
-            }
-
-            async for product_record in ijson.items(afp, 'results.item'):
-                batch_task_dict['results'].append(product_record)
-                read_counter += 1
-                if max_records and read_counter >= max_records:
-                    break
-                if counter == int(os.environ.get('SAVE_PER_PACK', 100)):
-                    batch_task_dict['batch_end'] = read_counter
-                    await redis.enqueue_job('process_results', batch_task_dict)
-                    batch_task_dict = {
-                        'what': task.get('what'),
-                        'model': 'product',
-                        'results': [],
-                        'run_id': run_id,
-                        'partition_records': partition_records,
-                    }
-                    counter = -1
-                    send_counter += 1
-                    enqueue_live_progress(
-                        run_id=run_id,
-                        importer="ndc",
-                        status="running",
-                        phase="ndc parsing records",
-                        unit="records",
-                        done=read_counter,
-                        total=partition_records or None,
-                        message=f"parsed {read_counter} records",
-                    )
-                counter += 1
-            batch_task_dict['batch_end'] = read_counter
-            await redis.enqueue_job('process_results', batch_task_dict)
-            enqueue_live_progress(
-                run_id=run_id,
-                importer="ndc",
-                status="running",
-                phase="ndc partition parsed",
-                unit="records",
-                done=read_counter,
-                total=partition_records or None,
-                message=f"parsed {read_counter} records",
-            )
-
-    print('Added taks: ', send_counter + 1)
-    return 1
+    return await download_partition_content(ctx, task, NDC_DOWNLOAD_SPEC)
 
 
 async def process_results(ctx, task):
