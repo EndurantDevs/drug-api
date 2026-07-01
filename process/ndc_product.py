@@ -49,6 +49,97 @@ def _derive_is_otc(res: dict) -> Optional[bool]:
     return None
 
 
+def _record_column_value(record_dict: dict, column_name: str) -> object:
+    raw_value = record_dict.get(column_name)
+    if ("_date" in column_name) and raw_value:
+        return parse_date(raw_value, fuzzy=True)
+    if raw_value:
+        return raw_value
+    return None
+
+
+def _product_row_dict_from_record(product_record: dict, product_columns: list[str]) -> dict[str, object]:
+    product_row_dict = {
+        product_column: _record_column_value(product_record, product_column)
+        for product_column in product_columns
+    }
+    openfda_dict = product_record.get('openfda') or {}
+    rxnorm_values = openfda_dict.get('rxcui') or []
+    product_row_dict['rxnorm_ids'] = [str(rxnorm_value) for rxnorm_value in rxnorm_values]
+    product_row_dict['is_otc'] = _derive_is_otc(product_record)
+
+    if not ('dosage_form' in product_row_dict) and product_row_dict['dosage_form']:
+        product_row_dict['dosage_form'] = ''
+    product_row_dict['short_dosage_form'] = product_row_dict['dosage_form'].split(',')[0]
+    return product_row_dict
+
+
+def _package_column_value(
+    package_record: dict,
+    product_row_dict: dict,
+    package_column: str,
+) -> object:
+    if ("_date" in package_column) and package_record.get(package_column):
+        return parse_date(package_record.get(package_column), fuzzy=True)
+    if package_column in ['product_ndc', 'package_ndc']:
+        package_record['product_ndc'] = product_row_dict['product_ndc']
+        return package_record.get(package_column)
+    if package_record.get(package_column):
+        return package_record.get(package_column)
+    return None
+
+
+def _normalize_package_ndc(package_row_dict: dict) -> None:
+    if len(package_row_dict['package_ndc']) < 12:
+        package_row_dict['package_ndc'] = '-'.join(
+            (package_row_dict['product_ndc'], package_row_dict['package_ndc'])
+        )
+
+    ndc_segments = package_row_dict['package_ndc'].split('-')
+    if len(''.join(ndc_segments)) != 11:
+        if len(ndc_segments[0]) == 4:
+            ndc_segments[0] = '0' + ndc_segments[0]
+        elif len(ndc_segments[1]) == 3:
+            ndc_segments[1] = '0' + ndc_segments[1]
+        elif len(ndc_segments[2]) == 1:
+            ndc_segments[2] = '0' + ndc_segments[2]
+    package_row_dict['ndc11'] = ''.join(ndc_segments)
+
+
+def _apply_package_description(package_row_dict: dict, product_row_dict: dict) -> None:
+    description_match = product_description_re.match(package_row_dict['description'])
+    if not description_match:
+        return
+    (
+        package_row_dict['size'],
+        package_row_dict['size_extra'],
+        package_row_dict['packages_number'],
+        package_row_dict['package_format'],
+    ) = description_match.groups()
+    package_row_dict['size'] = int(package_row_dict['size'])
+    package_row_dict['packages_number'] = int(package_row_dict['packages_number'])
+    if package_row_dict['size_extra'] == product_row_dict['dosage_form']:
+        package_row_dict['size_extra'] = ''
+
+
+def _package_row_dict_from_record(
+    package_record: dict,
+    product_row_dict: dict,
+    package_columns: list[str],
+) -> dict[str, object]:
+    package_row_dict = {
+        package_column: _package_column_value(package_record, product_row_dict, package_column)
+        for package_column in package_columns
+    }
+    package_row_dict['product_ndc'] = product_row_dict['product_ndc']
+    if not ('description' in package_row_dict) and package_row_dict['description']:
+        package_row_dict['description'] = ''
+
+    _normalize_package_ndc(package_row_dict)
+    _apply_package_description(package_row_dict, product_row_dict)
+    return package_row_dict
+
+
 async def download_content(ctx, task):
     """Download one FDA NDC partition and enqueue product parse batches."""
     redis = ctx['redis']
@@ -142,72 +233,15 @@ async def process_results(ctx, task):
     myproduct = make_class(Product, import_date)
     mypackage = make_class(Package, import_date)
 
+    product_columns = [column.name for column in inspect(myproduct).c]
+    package_columns = [column.name for column in inspect(Package).c]
+
     product_rows = []
     package_rows = []
-
     for product_record in task['results']:
-        product_row_dict = {}
-        for col in [column.name for column in inspect(myproduct).c]:
-            if ("_date" in col) and product_record.get(col):
-                product_row_dict[col] = parse_date(product_record.get(col), fuzzy=True)
-            elif product_record.get(col):
-                product_row_dict[col] = product_record.get(col)
-            elif col not in product_row_dict:
-                product_row_dict[col] = None
-        openfda_payload = product_record.get('openfda') or {}
-        rxnorm_values = openfda_payload.get('rxcui') or []
-        product_row_dict['rxnorm_ids'] = [str(rxnorm_value) for rxnorm_value in rxnorm_values]
-        product_row_dict['is_otc'] = _derive_is_otc(product_record)
-
-        if not ('dosage_form' in product_row_dict) and product_row_dict['dosage_form']:
-            product_row_dict['dosage_form'] = ''
-        product_row_dict['short_dosage_form'] = product_row_dict['dosage_form'].split(',')[0]
-
+        product_row_dict = _product_row_dict_from_record(product_record, product_columns)
         for package_record in product_record['packaging']:
-            package_row_dict = {}
-            for pkg_col in [column.name for column in inspect(Package).c]:
-                if ("_date" in pkg_col) and package_record.get(pkg_col):
-                    package_row_dict[pkg_col] = parse_date(package_record.get(pkg_col), fuzzy=True)
-                elif pkg_col in ['product_ndc', 'package_ndc']:
-                    package_record['product_ndc'] = product_row_dict['product_ndc']
-                    package_row_dict[pkg_col] = package_record.get(pkg_col)
-                elif package_record.get(pkg_col):
-                    package_row_dict[pkg_col] = package_record.get(pkg_col)
-                elif pkg_col not in package_row_dict:
-                    package_row_dict[pkg_col] = None
-            package_row_dict['product_ndc'] = product_row_dict['product_ndc']
-            if not ('description' in package_row_dict) and package_row_dict['description']:
-                package_row_dict['description'] = ''
-
-            if len(package_row_dict['package_ndc']) < 12:
-                package_row_dict['package_ndc'] = '-'.join(
-                    (package_row_dict['product_ndc'], package_row_dict['package_ndc'])
-                )
-
-            ndc_segments = package_row_dict['package_ndc'].split('-')
-
-            if (len(''.join(ndc_segments)) != 11):
-                if(len(ndc_segments[0]) == 4):
-                    ndc_segments[0] = '0' + ndc_segments[0]
-                elif(len(ndc_segments[1]) == 3):
-                    ndc_segments[1] = '0' + ndc_segments[1]
-                elif(len(ndc_segments[2]) == 1):
-                    ndc_segments[2] = '0' + ndc_segments[2]
-            package_row_dict['ndc11'] = ''.join(ndc_segments)
-
-            if (description_match := product_description_re.match(package_row_dict['description'])):
-                (
-                    package_row_dict['size'],
-                    package_row_dict['size_extra'],
-                    package_row_dict['packages_number'],
-                    package_row_dict['package_format'],
-                ) = description_match.groups()
-                package_row_dict['size'] = int(package_row_dict['size'])
-                package_row_dict['packages_number'] = int(package_row_dict['packages_number'])
-                if package_row_dict['size_extra'] == product_row_dict['dosage_form']:
-                    package_row_dict['size_extra'] = ''
-
-            package_rows.append(package_row_dict)
+            package_rows.append(_package_row_dict_from_record(package_record, product_row_dict, package_columns))
         product_rows.append(product_row_dict)
 
     package_by_ndc = {}
