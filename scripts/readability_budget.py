@@ -381,6 +381,10 @@ def _find_comment_noise(repo_root: Path, path: Path, config: dict[str, Any]) -> 
     return issues
 
 
+def _is_test_function(relative: str, name: str) -> bool:
+    return relative.startswith("tests/") and name.startswith("test_")
+
+
 def _max_nesting_depth(node: ast.AST, depth: int = 0) -> int:
     if isinstance(node, SCOPE_NODES):
         return depth
@@ -542,7 +546,9 @@ class FunctionVisitor(ast.NodeVisitor):
         relative: str,
     ) -> None:
         tokens = _split_name_tokens(node.name)
-        max_tokens = _threshold(self.config, "max_function_name_tokens", 6)
+        threshold_name = "max_test_function_name_tokens" if _is_test_function(relative, node.name) else "max_function_name_tokens"
+        default_limit = 12 if threshold_name == "max_test_function_name_tokens" else 6
+        max_tokens = _threshold(self.config, threshold_name, default_limit)
         if len(tokens) > max_tokens:
             self.issues.append(
                 Issue(

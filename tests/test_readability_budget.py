@@ -130,6 +130,37 @@ def test_readability_budget_reports_long_functions(tmp_path):
     assert snapshot["issues"]["long_functions"][0]["function"] == "too_long"
 
 
+def test_descriptive_test_names_are_allowed(tmp_path):
+    repo_root = tmp_path
+    test_package = repo_root / "tests"
+    test_package.mkdir()
+    (test_package / "test_module.py").write_text(
+        textwrap.dedent(
+            """
+            def test_product_lookup_returns_empty_payload_for_unknown_rxnorm_id():
+                assert True
+            """
+        ),
+        encoding="utf-8",
+    )
+    config_dict = {
+        "source_roots": ["tests"],
+        "include_suffixes": [".py"],
+        "exclude_globs": [],
+        "thresholds": {
+            "max_file_lines": 20,
+            "max_function_lines": 20,
+            "max_nesting_depth": 2,
+            "max_function_name_tokens": 6,
+        },
+        "inline_suppression_patterns": [],
+    }
+
+    snapshot = readability_budget.build_snapshot(repo_root, config_dict)
+
+    _assert_issue_count(snapshot, "function_name_shape", 0)
+
+
 def test_readability_budget_ignores_numeric_comparisons(tmp_path):
     repo_root = tmp_path
     package = repo_root / "pkg"
