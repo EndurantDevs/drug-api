@@ -138,6 +138,15 @@ class Issue:
         return payload
 
 
+@dataclass(frozen=True)
+class LocalNameRules:
+    ambiguous_names: set[str]
+    allowed_short_names: set[str]
+    always_bad_short_names: set[str]
+    min_vague_scope_lines: int
+    max_short_scope_lines: int
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -234,6 +243,10 @@ def _is_bool_expression(node: ast.AST) -> bool:
 
 def _is_boolean_or_none_literal(node: ast.AST) -> bool:
     return isinstance(node, ast.Constant) and (isinstance(node.value, bool) or node.value is None)
+
+
+def _is_ellipsis_expr(node: ast.AST) -> bool:
+    return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and node.value.value is Ellipsis
 
 
 def _collection_expression_kind(node: ast.AST) -> str | None:
@@ -485,8 +498,18 @@ class FunctionVisitor(ast.NodeVisitor):
     ) -> None:
         """Report vague names, overlong names, and boolean predicate mismatches."""
         relative = self.path.relative_to(self.repo_root).as_posix()
+        self._check_ambiguous_function_name(node, qualified_name, function_lines, relative)
+        self._check_function_name_length(node, qualified_name, relative)
+        self._check_boolean_function_name(node, qualified_name, relative)
+
+    def _check_ambiguous_function_name(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        qualified_name: str,
+        function_lines: int,
+        relative: str,
+    ) -> None:
         name = node.name.strip("_")
-        tokens = _split_name_tokens(node.name)
         ambiguous_names = _name_list(
             self.config,
             "ambiguous_function_names",
@@ -508,6 +531,14 @@ class FunctionVisitor(ast.NodeVisitor):
                     },
                 )
             )
+
+    def _check_function_name_length(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        qualified_name: str,
+        relative: str,
+    ) -> None:
+        tokens = _split_name_tokens(node.name)
         max_tokens = _threshold(self.config, "max_function_name_tokens", 6)
         if len(tokens) > max_tokens:
             self.issues.append(
@@ -525,6 +556,13 @@ class FunctionVisitor(ast.NodeVisitor):
                     },
                 )
             )
+
+    def _check_boolean_function_name(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        qualified_name: str,
+        relative: str,
+    ) -> None:
         if self._has_only_boolean_returns(node):
             boolean_prefixes = _name_prefixes(self.config, "boolean_prefixes", DEFAULT_BOOLEAN_PREFIXES)
             if not _has_boolean_prefix(node.name, boolean_prefixes):
@@ -592,40 +630,25 @@ class FunctionVisitor(ast.NodeVisitor):
         """Report local names that obscure type, scope, or mutable state."""
         relative = self.path.relative_to(self.repo_root).as_posix()
         assigned_names: set[str] = {arg.arg for arg in self._iter_args(node)}
-        ambiguous_names = _name_list(
-            self.config,
-            "ambiguous_variable_names",
-            DEFAULT_AMBIGUOUS_VARIABLE_NAMES,
+        local_name_rules = LocalNameRules(
+            ambiguous_names=_name_list(
+                self.config,
+                "ambiguous_variable_names",
+                DEFAULT_AMBIGUOUS_VARIABLE_NAMES,
+            ),
+            allowed_short_names=_name_list(self.config, "allowed_short_names", DEFAULT_ALLOWED_SHORT_NAMES),
+            always_bad_short_names=_name_list(
+                self.config,
+                "always_bad_short_names",
+                DEFAULT_ALWAYS_BAD_SHORT_NAMES,
+            ),
+            min_vague_scope_lines=_threshold(self.config, "min_ambiguous_variable_scope_lines", 30),
+            max_short_scope_lines=_threshold(self.config, "max_single_letter_scope_lines", 15),
         )
         boolean_prefixes = _name_prefixes(self.config, "boolean_prefixes", DEFAULT_BOOLEAN_PREFIXES)
-        allowed_short_names = _name_list(self.config, "allowed_short_names", DEFAULT_ALLOWED_SHORT_NAMES)
-        always_bad_short_names = _name_list(
-            self.config,
-            "always_bad_short_names",
-            DEFAULT_ALWAYS_BAD_SHORT_NAMES,
-        )
-        min_vague_scope_lines = _threshold(self.config, "min_ambiguous_variable_scope_lines", 30)
-        max_short_scope_lines = _threshold(self.config, "max_single_letter_scope_lines", 15)
 
         for local_node in _iter_local_nodes(node):
-            if isinstance(local_node, ast.Name) and isinstance(local_node.ctx, ast.Store):
-                assigned_names.add(local_node.id)
-            elif isinstance(local_node, ast.Global):
-                self._add_global_state_issue(relative, qualified_name, local_node, "global")
-            elif isinstance(local_node, ast.Nonlocal):
-                self._add_global_state_issue(relative, qualified_name, local_node, "nonlocal")
-            elif isinstance(local_node, ast.Pass):
-                self._add_pass_placeholder_issue(relative, qualified_name, local_node, "pass")
-            elif (
-                isinstance(local_node, ast.Expr)
-                and isinstance(local_node.value, ast.Constant)
-                and local_node.value.value is Ellipsis
-            ):
-                self._add_pass_placeholder_issue(relative, qualified_name, local_node, "ellipsis")
-            elif isinstance(local_node, ast.Compare):
-                self._check_literal_boolean_compare(relative, qualified_name, local_node)
-            elif isinstance(local_node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-                self._check_assignment_names(relative, qualified_name, local_node, boolean_prefixes)
+            self._check_local_node(relative, qualified_name, local_node, assigned_names, boolean_prefixes)
 
         max_locals = _threshold(self.config, "max_locals", 25)
         if len(assigned_names) > max_locals:
@@ -643,47 +666,96 @@ class FunctionVisitor(ast.NodeVisitor):
                 )
             )
         for name in sorted(assigned_names):
-            if name in BUILTIN_NAMES and not (name.startswith("__") and name.endswith("__")):
-                self.issues.append(
-                    Issue(
-                        "builtin_shadowing",
-                        f"builtin_shadowing:{relative}:{qualified_name}:{name}",
-                        relative,
-                        {"function": qualified_name, "line": node.lineno, "name": name},
-                    )
+            self._check_local_name(
+                relative,
+                qualified_name,
+                node,
+                name,
+                function_lines,
+                local_name_rules,
+            )
+
+    def _check_local_node(
+        self,
+        relative: str,
+        qualified_name: str,
+        local_node: ast.AST,
+        assigned_names: set[str],
+        boolean_prefixes: tuple[str, ...],
+    ) -> None:
+        if isinstance(local_node, ast.Name) and isinstance(local_node.ctx, ast.Store):
+            assigned_names.add(local_node.id)
+            return
+        if isinstance(local_node, ast.Global):
+            self._add_global_state_issue(relative, qualified_name, local_node, "global")
+            return
+        if isinstance(local_node, ast.Nonlocal):
+            self._add_global_state_issue(relative, qualified_name, local_node, "nonlocal")
+            return
+        if isinstance(local_node, ast.Pass):
+            self._add_pass_placeholder_issue(relative, qualified_name, local_node, "pass")
+            return
+        if _is_ellipsis_expr(local_node):
+            self._add_pass_placeholder_issue(relative, qualified_name, local_node, "ellipsis")
+            return
+        if isinstance(local_node, ast.Compare):
+            self._check_literal_boolean_compare(relative, qualified_name, local_node)
+            return
+        if isinstance(local_node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+            self._check_assignment_names(relative, qualified_name, local_node, boolean_prefixes)
+
+    def _check_local_name(
+        self,
+        relative: str,
+        qualified_name: str,
+        node: ast.FunctionDef | ast.AsyncFunctionDef,
+        name: str,
+        function_lines: int,
+        local_name_rules: LocalNameRules,
+    ) -> None:
+        if name in BUILTIN_NAMES and not (name.startswith("__") and name.endswith("__")):
+            self.issues.append(
+                Issue(
+                    "builtin_shadowing",
+                    f"builtin_shadowing:{relative}:{qualified_name}:{name}",
+                    relative,
+                    {"function": qualified_name, "line": node.lineno, "name": name},
                 )
-            if name in always_bad_short_names or (
-                len(name) == 1 and name not in allowed_short_names and function_lines > max_short_scope_lines
-            ):
-                self.issues.append(
-                    Issue(
-                        "single_letter_names",
-                        f"single_letter_name:{relative}:{qualified_name}:{name}",
-                        relative,
-                        {
-                            "function": qualified_name,
-                            "line": node.lineno,
-                            "name": name,
-                            "lines": function_lines,
-                            "limit": max_short_scope_lines,
-                        },
-                    )
+            )
+        if name in local_name_rules.always_bad_short_names or (
+            len(name) == 1
+            and name not in local_name_rules.allowed_short_names
+            and function_lines > local_name_rules.max_short_scope_lines
+        ):
+            self.issues.append(
+                Issue(
+                    "single_letter_names",
+                    f"single_letter_name:{relative}:{qualified_name}:{name}",
+                    relative,
+                    {
+                        "function": qualified_name,
+                        "line": node.lineno,
+                        "name": name,
+                        "lines": function_lines,
+                        "limit": local_name_rules.max_short_scope_lines,
+                    },
                 )
-            if function_lines >= min_vague_scope_lines and name in ambiguous_names:
-                self.issues.append(
-                    Issue(
-                        "ambiguous_variable_names",
-                        f"ambiguous_variable_name:{relative}:{qualified_name}:{name}",
-                        relative,
-                        {
-                            "function": qualified_name,
-                            "line": node.lineno,
-                            "name": name,
-                            "lines": function_lines,
-                            "limit": min_vague_scope_lines,
-                        },
-                    )
+            )
+        if function_lines >= local_name_rules.min_vague_scope_lines and name in local_name_rules.ambiguous_names:
+            self.issues.append(
+                Issue(
+                    "ambiguous_variable_names",
+                    f"ambiguous_variable_name:{relative}:{qualified_name}:{name}",
+                    relative,
+                    {
+                        "function": qualified_name,
+                        "line": node.lineno,
+                        "name": name,
+                        "lines": function_lines,
+                        "limit": local_name_rules.min_vague_scope_lines,
+                    },
                 )
+            )
 
     def _check_assignment_names(
         self,
