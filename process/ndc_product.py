@@ -21,6 +21,7 @@ from db.models import Package, Product, db
 from process.control_lifecycle import mark_control_run
 from process.ext.utils import download_it, download_it_and_save, make_class, print_time_info, push_objects
 from process.live_progress import enqueue_live_progress
+from process.ndc_publish import publish_ndc_tables
 from process.redis_config import redis_settings
 
 logger = logging.getLogger(__name__)
@@ -312,103 +313,7 @@ async def _shutdown_impl(ctx):
     """Validate product counts, swap NDC tables, and report final status."""
     import_date = ctx['import_date']
     control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
-    if ctx['context'].get('product_count'):
-        myproduct = make_class(Product, import_date)
-        import_product_count = await db.select(db.func.count(myproduct.product_id)).scalar()
-        expected_product_count = int(ctx['context']['product_count'])
-        minimum_expected = int(expected_product_count * 0.95)
-        if import_product_count and import_product_count >= minimum_expected:
-            db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
-            await db.status("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-            await db.status("CREATE EXTENSION IF NOT EXISTS btree_gin;")
-            for table in ['product', 'package']:
-                async with db.transaction():
-                    print(f'Creating indexes for {table} ...')
-                    await db.status(
-                        f"CREATE INDEX {table}_idx_product_ndc_{import_date} ON "
-                        f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
-
-                    await db.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
-
-                    if table == 'product':
-                        await db.status(f"CREATE INDEX {table}_idx_brand_trgm_idx_{import_date} ON "
-                                        f"{db_schema}.{table}_{import_date} "
-                                        f"USING GIN(brand_name gin_trgm_ops);")
-                        await db.status(f"CREATE INDEX {table}_idx_generic_trgm_idx_{import_date} ON "
-                                        f"{db_schema}.{table}_{import_date} USING "
-                                        f"GIN(generic_name gin_trgm_ops);")
-                        await db.status(
-                            f"CREATE INDEX product_rxnorm_idx_{import_date} ON "
-                            f"{db_schema}.product_{import_date} USING GIN(rxnorm_ids);"
-                        )
-
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.{table}_idx_product_ndc RENAME TO "
-                                    f"{table}_idx_product_ndc_old;")
-
-                    if table == 'product':
-                        await db.status(f"ALTER INDEX IF EXISTS "
-                                        f"{db_schema}.{table}_idx_brand_trgm_idx RENAME TO "
-                                        f"{table}_idx_brand_trgm_idx_old;")
-                        await db.status(f"ALTER INDEX IF EXISTS "
-                                        f"{db_schema}.{table}_idx_generic_trgm_idx RENAME TO "
-                                        f"{table}_idx_generic_trgm_idx_old;")
-                        await db.status(f"ALTER INDEX IF EXISTS "
-                                        f"{db_schema}.product_rxnorm_idx RENAME TO "
-                                        f"product_rxnorm_idx_old;")
-
-                        await db.status(f"ALTER INDEX IF EXISTS "
-                                        f"{db_schema}.{table}_idx_brand_trgm_idx_{import_date} RENAME TO "
-                                        f"{table}_idx_brand_trgm_idx;")
-                        await db.status(f"ALTER INDEX IF EXISTS "
-                                        f"{db_schema}.{table}_idx_generic_trgm_idx_{import_date} RENAME TO "
-                                        f"{table}_idx_generic_trgm_idx;")
-                        await db.status(f"ALTER INDEX IF EXISTS "
-                                        f"{db_schema}.product_rxnorm_idx_{import_date} RENAME TO "
-                                        f"product_rxnorm_idx;")
-
-                    await db.status(f"ALTER INDEX IF EXISTS "
-                                    f"{db_schema}.{table}_idx_product_ndc_{import_date} RENAME TO "
-                                    f"{table}_idx_product_ndc;")
-
-                    await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table} RENAME TO {table}_old;")
-                    await db.status(f"ALTER TABLE IF EXISTS {db_schema}.{table}_{import_date} RENAME TO {table};")
-
-            print('Products in JSON:', expected_product_count)
-            print('Products in DB: ', await db.select(db.func.count(Product.product_id)).scalar())
-            print('Packages in DB: ', await db.select(db.func.count(Package.package_ndc)).scalar())
-            if import_product_count != expected_product_count:
-                print(
-                    f"WARNING: Source total_records ({expected_product_count}) "
-                    f"does not exactly match imported unique product rows ({import_product_count})."
-                )
-            print_time_info(ctx['context']['start'])
-            await mark_control_run(
-                control_run_id,
-                status="succeeded",
-                phase_detail="ndc import published",
-                progress_message="succeeded",
-                metrics={"source_product_count": expected_product_count, "imported_product_count": import_product_count},
-                progress={
-                    "unit": "records",
-                    "total": expected_product_count,
-                    "done": import_product_count,
-                    "pct": 100,
-                    "message": "succeeded",
-                    "phase": "ndc import published",
-                },
-            )
-        else:
-            print(f"Aborted: Imported rows Number differs from FDA rows number! "
-                  f"(JSON: {expected_product_count}, DB: {import_product_count})")
-            await mark_control_run(
-                control_run_id,
-                status="failed",
-                phase_detail="ndc import validation failed",
-                progress_message="failed",
-                error={"code": "validation_failed", "message": "imported product count below expected threshold"},
-            )
-    else:
+    if not ctx['context'].get('product_count'):
         print('Product import failed')
         await mark_control_run(
             control_run_id,
@@ -417,6 +322,59 @@ async def _shutdown_impl(ctx):
             progress_message="failed",
             error={"code": "import_failed", "message": "product_count was not set"},
         )
+        return
+
+    myproduct = make_class(Product, import_date)
+    import_product_count = await db.select(db.func.count(myproduct.product_id)).scalar()
+    expected_product_count = int(ctx['context']['product_count'])
+    minimum_expected = int(expected_product_count * 0.95)
+    if not import_product_count or import_product_count < minimum_expected:
+        print(f"Aborted: Imported rows Number differs from FDA rows number! "
+              f"(JSON: {expected_product_count}, DB: {import_product_count})")
+        await mark_control_run(
+            control_run_id,
+            status="failed",
+            phase_detail="ndc import validation failed",
+            progress_message="failed",
+            error={"code": "validation_failed", "message": "imported product count below expected threshold"},
+        )
+        return
+
+    db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
+    await publish_ndc_tables(db, db_schema, import_date)
+    await _mark_ndc_success(ctx, control_run_id, expected_product_count, import_product_count)
+
+
+async def _mark_ndc_success(
+    ctx: dict,
+    control_run_id: str | None,
+    expected_product_count: int,
+    import_product_count: int,
+) -> None:
+    print('Products in JSON:', expected_product_count)
+    print('Products in DB: ', await db.select(db.func.count(Product.product_id)).scalar())
+    print('Packages in DB: ', await db.select(db.func.count(Package.package_ndc)).scalar())
+    if import_product_count != expected_product_count:
+        print(
+            f"WARNING: Source total_records ({expected_product_count}) "
+            f"does not exactly match imported unique product rows ({import_product_count})."
+        )
+    print_time_info(ctx['context']['start'])
+    await mark_control_run(
+        control_run_id,
+        status="succeeded",
+        phase_detail="ndc import published",
+        progress_message="succeeded",
+        metrics={"source_product_count": expected_product_count, "imported_product_count": import_product_count},
+        progress={
+            "unit": "records",
+            "total": expected_product_count,
+            "done": import_product_count,
+            "pct": 100,
+            "message": "succeeded",
+            "phase": "ndc import published",
+        },
+    )
 
 
 async def init_file(ctx, task=None):
