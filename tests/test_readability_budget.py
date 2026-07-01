@@ -236,6 +236,32 @@ def test_readability_budget_ignores_isoformat_assignments(tmp_path):
     _assert_issue_count(snapshot, "boolean_name_mismatch", 0)
 
 
+def test_readability_budget_ignores_response_factory_calls(tmp_path):
+    repo_root = tmp_path
+    package = repo_root / "pkg"
+    package.mkdir()
+    (package / "module.py").write_text(
+        textwrap.dedent(
+            """
+            def _route_response(response):
+                response_headers_by_name = {"Allow": "OPTIONS"}
+                preflight_response = response.empty(status=204, headers=response_headers_by_name)
+                return preflight_response
+            """
+        ),
+        encoding="utf-8",
+    )
+    _write_config(repo_root)
+
+    snapshot = readability_budget.build_snapshot(
+        repo_root,
+        json.loads((repo_root / "readability-budget.json").read_text(encoding="utf-8")),
+    )
+
+    _assert_issue_count(snapshot, "boolean_name_mismatch", 0)
+    _assert_issue_count(snapshot, "collection_name_mismatch", 0)
+
+
 def test_readability_budget_does_not_parse_non_python_files(tmp_path):
     repo_root = tmp_path
     package = repo_root / "pkg"

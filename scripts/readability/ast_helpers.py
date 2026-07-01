@@ -34,6 +34,8 @@ def is_bool_expression(node: ast.AST) -> bool:
         return True
     if isinstance(node, ast.Call):
         if isinstance(node.func, ast.Attribute):
+            if node.func.attr in {"empty", "full"} and (node.args or node.keywords):
+                return False
             return is_boolean_method_name(node.func.attr)
         if isinstance(node.func, ast.Name):
             return has_boolean_prefix(node.func.id, DEFAULT_BOOLEAN_PREFIXES)
@@ -48,6 +50,11 @@ def is_boolean_or_none_literal(node: ast.AST) -> bool:
 def is_ellipsis_expr(node: ast.AST) -> bool:
     """Return true for a bare ellipsis expression."""
     return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and node.value.value is Ellipsis
+
+
+def is_stub_body(statements: list[ast.stmt]) -> bool:
+    """Return true when a function body is only an interface stub marker."""
+    return len(statements) == 1 and (isinstance(statements[0], ast.Pass) or is_ellipsis_expr(statements[0]))
 
 
 def collection_expression_kind(node: ast.AST) -> str | None:
@@ -71,6 +78,8 @@ def collection_expression_kind(node: ast.AST) -> str | None:
 def iter_local_nodes(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterable[ast.AST]:
     """Yield nodes inside a function without walking nested scopes."""
     for child in node.body:
+        if isinstance(child, SCOPE_NODES):
+            continue
         yield from iter_without_nested_scopes(child)
 
 

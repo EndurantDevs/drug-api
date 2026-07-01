@@ -6,8 +6,8 @@ import ast
 from pathlib import Path
 from typing import Any
 
-from .ast_helpers import (is_bool_expression, is_test_function, iter_without_nested_scopes, max_nesting_depth,
-                          parameter_count)
+from .ast_helpers import (is_bool_expression, is_stub_body, is_test_function, iter_without_nested_scopes,
+                          max_nesting_depth, parameter_count)
 from .config import (DEFAULT_AMBIGUOUS_FUNCTION_NAMES, DEFAULT_BOOLEAN_PREFIXES, has_boolean_prefix,
                      is_boolean_method_name, name_list, name_prefixes, split_name_tokens, threshold)
 from .local_scope import LocalScopeChecker
@@ -21,14 +21,20 @@ class FunctionVisitor(ast.NodeVisitor):
         self.config = config
         self.issues: list[Issue] = []
         self.scope: list[str] = []
+        self.interface_scope_depth = 0
         self.local_scope_checker = LocalScopeChecker(config)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Check class-level naming rules before walking nested definitions."""
         self._check_class_name(node)
+        is_interface_class = _is_interface_class(node)
+        if is_interface_class:
+            self.interface_scope_depth += 1
         self.scope.append(node.name)
         self.generic_visit(node)
         self.scope.pop()
+        if is_interface_class:
+            self.interface_scope_depth -= 1
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Check synchronous functions with the shared function rules."""
@@ -51,6 +57,7 @@ class FunctionVisitor(ast.NodeVisitor):
                 qualified_name,
                 node,
                 function_lines,
+                allow_stub_body=self._should_allow_stub_body(node),
             )
         )
         self.scope.append(node.name)
@@ -95,6 +102,13 @@ class FunctionVisitor(ast.NodeVisitor):
                     },
                 )
             )
+
+    def _should_allow_stub_body(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        if self.interface_scope_depth > 0:
+            return True
+        if not is_stub_body(node.body):
+            return False
+        return any(_decorator_name(decorator) == "abstractmethod" for decorator in node.decorator_list)
 
     def _check_class_name(self, node: ast.ClassDef) -> None:
         relative = self.path.relative_to(self.repo_root).as_posix()
@@ -279,3 +293,27 @@ class FunctionVisitor(ast.NodeVisitor):
             if isinstance(child, ast.Return) and child.value is not None
         ]
         return bool(returns) and all(is_bool_expression(value) for value in returns)
+
+
+def _is_interface_class(node: ast.ClassDef) -> bool:
+    return any(_base_name(base) in {"ABC", "Protocol"} for base in node.bases)
+
+
+def _base_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        return _base_name(node.value)
+    return ""
+
+
+def _decorator_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Call):
+        return _decorator_name(node.func)
+    return ""

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .ast_helpers import (BUILTIN_NAMES, collection_expression_kind, is_bool_expression, is_boolean_or_none_literal,
-                          is_ellipsis_expr, iter_args, iter_local_nodes, target_names)
+                          is_ellipsis_expr, is_stub_body, iter_args, iter_local_nodes, target_names)
 from .config import (DEFAULT_ALLOWED_SHORT_NAMES, DEFAULT_ALWAYS_BAD_SHORT_NAMES, DEFAULT_AMBIGUOUS_VARIABLE_NAMES,
                      DEFAULT_BOOLEAN_PREFIXES, DEFAULT_COLLECTION_SINGULAR_EXCEPTIONS, DEFAULT_DICT_NAME_MARKERS,
                      has_boolean_prefix, name_list, name_prefixes, threshold)
@@ -34,6 +34,8 @@ class LocalScopeChecker:
         qualified_name: str,
         node: ast.FunctionDef | ast.AsyncFunctionDef,
         function_lines: int,
+        *,
+        allow_stub_body: bool = False,
     ) -> list[Issue]:
         """Return readability findings for local variables and statements."""
         self.issues = []
@@ -41,8 +43,9 @@ class LocalScopeChecker:
         local_name_rules = self._build_local_name_rules()
         boolean_prefixes = name_prefixes(self.config, "boolean_prefixes", DEFAULT_BOOLEAN_PREFIXES)
 
-        for local_node in iter_local_nodes(node):
-            self._check_local_node(relative, qualified_name, local_node, assigned_names, boolean_prefixes)
+        if not (allow_stub_body and is_stub_body(node.body)):
+            for local_node in iter_local_nodes(node):
+                self._check_local_node(relative, qualified_name, local_node, assigned_names, boolean_prefixes)
 
         self._check_local_count(relative, qualified_name, node, assigned_names)
         for name in sorted(assigned_names):
