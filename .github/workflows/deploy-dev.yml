@@ -15,6 +15,7 @@ concurrency:
 jobs:
   queue:
     name: Queue dev-node build
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -42,13 +43,19 @@ jobs:
             echo "::error::DEV_DEPLOY_HOST is not configured"
             exit 1
           fi
+          echo "::add-mask::${DEV_DEPLOY_HOST}"
+          while IFS= read -r address; do
+            [ -n "${address}" ] && echo "::add-mask::${address}"
+          done < <(getent ahosts "${DEV_DEPLOY_HOST}" 2>/dev/null | awk '{print $1}' | sort -u)
           if ! ssh -i ~/.ssh/dev-deploy \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
+            -o ConnectTimeout=20 \
+            -o ConnectionAttempts=3 \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile=~/.ssh/known_hosts \
             "ubuntu@${DEV_DEPLOY_HOST}" \
-            "${GITHUB_SHA} ${GITHUB_REF_NAME} --detach" >/tmp/dev-deploy.out 2>/tmp/dev-deploy.err; then
+            "${GITHUB_SHA} main --detach" >/dev/null 2>&1; then
             echo "::error::Failed to queue dev deploy"
             exit 1
           fi
