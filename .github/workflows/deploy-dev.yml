@@ -16,6 +16,7 @@ jobs:
   queue:
     name: Queue dev-node build
     if: ${{ github.ref == 'refs/heads/main' }}
+    environment: dev-deploy
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -23,7 +24,12 @@ jobs:
         env:
           DEV_DEPLOY_SSH_KEY: ${{ secrets.DEV_DEPLOY_SSH_KEY }}
           DEV_DEPLOY_KNOWN_HOSTS: ${{ secrets.DEV_DEPLOY_KNOWN_HOSTS }}
+          DEV_DEPLOY_SCOPE: ${{ secrets.DEV_DEPLOY_SCOPE }}
         run: |
+          if [ "${DEV_DEPLOY_SCOPE}" != "main-only-v1" ]; then
+            echo "::error::DEV_DEPLOY_SCOPE is invalid"
+            exit 1
+          fi
           for name in DEV_DEPLOY_SSH_KEY DEV_DEPLOY_KNOWN_HOSTS; do
             if [ -z "${!name}" ]; then
               echo "::error::${name} is not configured"
