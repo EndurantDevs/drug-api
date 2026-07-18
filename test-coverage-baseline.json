@@ -34,6 +34,14 @@
         "process/redis_config.py"
       ],
       "format": "coverage.py",
+      "growth": {
+        "changed_line_divisor": 10,
+        "debt_reduction_percent": 1,
+        "target_percent_by_metric": {
+          "branches": 90,
+          "lines": 95
+        }
+      },
       "metrics": {
         "branches": {
           "covered": 171,

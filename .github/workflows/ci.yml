@@ -105,7 +105,10 @@ jobs:
           fi
           if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA:test-coverage-baseline.json" 2>/dev/null; then
             git show "$BASE_SHA:test-coverage-baseline.json" > "$RUNNER_TEMP/test-coverage-base.json"
-            reference_args+=(--reference-baseline "$RUNNER_TEMP/test-coverage-base.json")
+            reference_args+=(
+              --reference-baseline "$RUNNER_TEMP/test-coverage-base.json"
+              --changed-since "$BASE_SHA"
+            )
           fi
           python scripts/coverage_ratchet.py "${reference_args[@]}"
 
