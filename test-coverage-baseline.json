@@ -1,0 +1,70 @@
+{
+  "reports": {
+    "python": {
+      "files": [
+        "api/__init__.py",
+        "api/control.py",
+        "api/control_imports.py",
+        "api/control_run_store.py",
+        "api/control_worker_manifest.py",
+        "api/control_workers.py",
+        "api/endpoint/__init__.py",
+        "api/endpoint/drug.py",
+        "api/endpoint/healthcheck.py",
+        "api/fields.py",
+        "api/utils.py",
+        "db/__init__.py",
+        "db/connection.py",
+        "db/json_mixin.py",
+        "db/migrator.py",
+        "db/models.py",
+        "db/statement_adapters.py",
+        "main.py",
+        "process/__init__.py",
+        "process/control_lifecycle.py",
+        "process/drug_indications.py",
+        "process/ext/utils.py",
+        "process/import_status_events.py",
+        "process/label.py",
+        "process/label_publish.py",
+        "process/live_progress.py",
+        "process/ndc_product.py",
+        "process/ndc_publish.py",
+        "process/partition_download.py",
+        "process/redis_config.py"
+      ],
+      "format": "coverage.py",
+      "metrics": {
+        "branches": {
+          "covered": 173,
+          "total": 634
+        },
+        "lines": {
+          "covered": 1518,
+          "total": 2815
+        }
+      },
+      "path": "test-coverage-python.json",
+      "scope": {
+        "exclude": [],
+        "include": [
+          "main.py",
+          "api/*.py",
+          "api/**/*.py",
+          "db/*.py",
+          "db/**/*.py",
+          "process/*.py",
+          "process/**/*.py",
+          "service/*.py",
+          "service/**/*.py"
+        ],
+        "policy": {
+          "branch": true,
+          "coverage": "7.15.2",
+          "pytest": "9.0.3"
+        }
+      }
+    }
+  },
+  "schema_version": 1
+}

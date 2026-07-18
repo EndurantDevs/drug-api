@@ -80,6 +80,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -89,7 +91,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
       - name: Run tests
-        run: python -m pytest -q
+        run: |
+          python -m coverage run --branch --source=. -m pytest -q
+          python -m coverage json -o test-coverage-python.json
+      - name: Test coverage ratchet
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python scripts/coverage_ratchet.py --self-test
+          reference_args=()
+          if [ -z "$BASE_SHA" ]; then
+            BASE_SHA="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA:test-coverage-baseline.json" 2>/dev/null; then
+            git show "$BASE_SHA:test-coverage-baseline.json" > "$RUNNER_TEMP/test-coverage-base.json"
+            reference_args+=(--reference-baseline "$RUNNER_TEMP/test-coverage-base.json")
+          fi
+          python scripts/coverage_ratchet.py "${reference_args[@]}"
 
   security:
     name: dependency and semgrep security
