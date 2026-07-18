@@ -10,6 +10,16 @@ and prevent new debt from entering unnoticed.
 - Use names that tell the human what role a value plays. Avoid generic
   function names, vague long-scope locals, one-letter names outside tiny scopes,
   and names that shadow Python builtins.
+- Do not distinguish one-item and multi-item functions only with a trailing
+  plural; make them differ by at least one full semantic token. Prefer keeping
+  the singular entity name for one item and adding cardinality or a collection
+  verb for many items, such as `refresh_node_health` and
+  `refresh_node_health_batch` rather than `refresh_nodes_health`. When a stable
+  multi-item API must remain, qualify the private helper by role or action, such
+  as `_format_credential_row` or `_publish_single_ndc_table`.
+- Externally defined protocol methods keep their required spellings. The checker
+  uses narrow built-in exemptions for known families such as SQLAlchemy-style
+  `scalar()` and `scalars()` methods.
 - Boolean names should read as predicates: `is_*`, `has_*`, `should_*`,
   `can_*`, `needs_*`, `supports_*`, or equivalent.
 - Collection names should reveal their shape: plural names for lists/sets and
@@ -31,7 +41,8 @@ and prevent new debt from entering unnoticed.
 - Inline suppressions are reported and blocked when new.
 - Naming and decomposition debt is reported for generic function/class names,
   vague local variable names in long scopes, boolean-name mismatches, builtin
-  shadowing, collection-name mismatches, one-letter names, too many parameters,
+  shadowing, confusable singular/plural function names, collection-name
+  mismatches, one-letter names, too many parameters,
   too many locals, global/nonlocal state, missing contract docstrings, placeholder
   bodies, and noisy comments.
 

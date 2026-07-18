@@ -9,10 +9,10 @@ async def publish_ndc_tables(database: Any, db_schema: str, import_date: str) ->
     await database.status("CREATE EXTENSION IF NOT EXISTS btree_gin;")
     for table in ['product', 'package']:
         async with database.transaction():
-            await _publish_ndc_table(database, db_schema, table, import_date)
+            await _publish_single_ndc_table(database, db_schema, table, import_date)
 
 
-async def _publish_ndc_table(database: Any, db_schema: str, table: str, import_date: str) -> None:
+async def _publish_single_ndc_table(database: Any, db_schema: str, table: str, import_date: str) -> None:
     print(f'Creating indexes for {table} ...')
     await database.status(
         f"CREATE INDEX {table}_idx_product_ndc_{import_date} ON "
