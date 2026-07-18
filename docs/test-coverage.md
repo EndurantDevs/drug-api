@@ -11,8 +11,8 @@ Measured with Coverage.py 7.15.2 across `main.py`, `api/`, `db/`,
 
 | Metric | Covered / total | Coverage |
 | --- | ---: | ---: |
-| Lines | 1,518 / 2,815 | 53.93% |
-| Branches | 173 / 634 | 27.29% |
+| Lines | 1,511 / 2,815 | 53.68% |
+| Branches | 171 / 634 | 26.97% |
 
 ## Local check
 

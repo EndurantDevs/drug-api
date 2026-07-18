@@ -36,11 +36,11 @@
       "format": "coverage.py",
       "metrics": {
         "branches": {
-          "covered": 173,
+          "covered": 171,
           "total": 634
         },
         "lines": {
-          "covered": 1518,
+          "covered": 1511,
           "total": 2815
         }
       },
