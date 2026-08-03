@@ -43,3 +43,16 @@ required improvement becomes the next PR's floor. The pinned Ubuntu CI
 measurement is canonical; if local counts differ, use the CI counts rather than
 committing platform-specific totals.
 Run `python scripts/coverage_ratchet.py --self-test` to exercise the gate.
+
+## CI forecast
+
+Before enforcing the ratchet, CI records a SHA-256 provenance envelope for the
+single coverage JSON report. The envelope binds the report to the exact checked
+out source commit and pull-request target base. The forecast refuses missing or
+stale provenance, target-base drift, and baseline path changes; it never falls
+back to `HEAD^`.
+
+The normal coverage artifact and the structured forecast artifact upload even
+when the ratchet fails. The forecast artifact records the exact debt cap,
+margin, changed in-scope source lines, and missing branch arcs, so a failed CI
+run contains the information needed to add focused coverage before a rerun.
