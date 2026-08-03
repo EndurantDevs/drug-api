@@ -282,6 +282,57 @@ def test_forecast_stages_report_metrics_for_the_real_ratchet(
         assert metric_by_name["margin"] == 0
 
 
+def test_forecast_stages_report_files_without_changing_reference_policy(
+    tmp_path: Path,
+):
+    """The candidate file set comes from the verified report, not tracked state."""
+
+    report_path = _write_report(
+        tmp_path,
+        covered_count=8,
+        total_count=10,
+        branch_total=10,
+    )
+    extra_source_path = tmp_path / "pkg" / "extra.py"
+    extra_source_path.write_text("extra = True\n", encoding="utf-8")
+    report_by_name = json.loads(report_path.read_text(encoding="utf-8"))
+    report_by_name["files"][str(extra_source_path)] = {
+        "summary": {
+            "covered_lines": 2,
+            "num_statements": 2,
+            "covered_branches": 2,
+            "num_branches": 2,
+        }
+    }
+    report_path.write_text(json.dumps(report_by_name), encoding="utf-8")
+    candidate_baseline = _baseline(report_path)
+    reference_baseline = _baseline(report_path)
+
+    (
+        candidate_snapshot,
+        reference_snapshot,
+        _candidate_path,
+        _reference_path,
+    ) = coverage_forecast._write_forecast_baselines(
+        tmp_path,
+        tmp_path,
+        candidate_baseline,
+        reference_baseline,
+        report_path,
+    )
+
+    candidate_report = candidate_snapshot["reports"]["python"]
+    reference_report = reference_snapshot["reports"]["python"]
+    assert candidate_report["files"] == ["pkg/extra.py", "pkg/sample.py"]
+    assert candidate_report["metrics"] == {
+        "branches": {"covered": 10, "total": 12},
+        "lines": {"covered": 10, "total": 12},
+    }
+    assert reference_report["files"] == ["pkg/sample.py"]
+    assert reference_report["metrics"] == reference_baseline["reports"]["python"]["metrics"]
+    assert reference_report["scope"] == reference_baseline["reports"]["python"]["scope"]
+
+
 def test_forecast_keeps_the_ratchet_red_when_report_debt_misses_the_cap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
