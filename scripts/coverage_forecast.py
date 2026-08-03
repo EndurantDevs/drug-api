@@ -188,12 +188,13 @@ def _with_report_snapshot(
     baseline_by_name: dict[str, Any],
     report_path: Path,
 ) -> dict[str, Any]:
-    """Stage one candidate baseline with the exact metrics from its CI report."""
+    """Stage one candidate baseline with the exact CI report snapshot."""
 
     temporary_baseline_by_name = _with_report_path(baseline_by_name, report_path)
     candidate_report_by_name = temporary_baseline_by_name["reports"]["python"]
     report_snapshot = _collect_report(root, "python", candidate_report_by_name)
     candidate_report_by_name["metrics"] = deepcopy(report_snapshot.metric_by_name)
+    candidate_report_by_name["files"] = sorted(report_snapshot.files)
     return temporary_baseline_by_name
 
 
