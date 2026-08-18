@@ -14,164 +14,40 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  PYTHON_VERSION: "3.14"
+  PYTHON_VERSION: "3.13.15"
 
 jobs:
-  public-hygiene:
-    name: public hygiene
+  prepush:
+    name: exact pre-push gate
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
-      - name: Run public hygiene
-        run: scripts/ci/prepush hygiene
-
-  python-quality:
-    name: python quality
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-      - name: Run Python quality
-        run: scripts/ci/prepush quality
-
-  test:
-    name: full unit test suite
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ github.sha }}
-      - uses: actions/setup-python@v7
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-      - name: Run tests
-        run: scripts/ci/prepush test
-      - name: Test coverage forecast
-        if: always()
+          cache-dependency-path: requirements-dev.txt
+      - name: Run exact shared gate
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: scripts/ci/prepush coverage
-      - name: Upload coverage evidence
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          PREPUSH_ARTIFACT_ROOT: ${{ runner.temp }}/drug-api-prepush
+        run: scripts/ci/prepush all
+      - name: Upload exact-gate receipt and coverage evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: drug-api-coverage-evidence
+          name: drug-api-prepush
           path: |
+            ${{ runner.temp }}/drug-api-prepush/receipt.txt
             test-coverage-python.json
             coverage-provenance.json
+            coverage-forecast.json
+            coverage-margins.txt
           if-no-files-found: warn
+          include-hidden-files: true
           retention-days: 1
-      - name: Upload coverage forecast
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: drug-api-coverage-forecast
-          path: ${{ runner.temp }}/coverage-forecast.json
-          if-no-files-found: warn
-          retention-days: 1
-
-  security:
-    name: dependency and semgrep security
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pip-audit==2.10.1
-      - name: Run dependency audits
-        run: scripts/ci/prepush security
-      - name: Semgrep
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: .semgrep.yml
-
-  postgres18-db-tests:
-    name: postgres18 migration and importer tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: healthporta_drug_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d healthporta_drug_ci"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      HLTHPRT_ENVIRONMENT: test
-      HLTHPRT_DB_DRIVER: asyncpg
-      HLTHPRT_DB_HOST: 127.0.0.1
-      HLTHPRT_DB_PORT: "5432"
-      HLTHPRT_DB_USER: postgres
-      HLTHPRT_DB_PASSWORD: postgres
-      HLTHPRT_DB_DATABASE: healthporta_drug_ci
-      HLTHPRT_DB_SCHEMA: rx_data
-      DB_SCHEMA: rx_data
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-      - name: Run PostgreSQL checks
-        run: scripts/ci/prepush postgres
-
-  redis-worker-smoke:
-    name: redis worker queue smoke
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      HLTHPRT_REDIS_ADDRESS: redis://127.0.0.1:6379
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-      - name: Run Redis checks
-        run: scripts/ci/prepush redis

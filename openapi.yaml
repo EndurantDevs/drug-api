@@ -26,11 +26,12 @@ paths:
     get:
       tags: [Healthcheck]
       operationId: getHealthcheck
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Healthcheck status
       description: Returns service metadata and a lightweight DB connectivity check.
       responses:
         '200':
-          description: Service and DB health status
+          description: Service and database are healthy
           content:
             application/json:
               schema:
@@ -38,13 +39,43 @@ paths:
               examples:
                 ok:
                   $ref: '#/components/examples/HealthcheckOk'
+        '503':
+          description: Service is running but the database check failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthcheckStatus'
         '500':
           $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/healthcheck/live:
+    get:
+      tags: [Healthcheck]
+      operationId: getLiveness
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
+      summary: Process liveness
+      description: Confirms that the API process can answer requests without probing dependencies.
+      responses:
+        '200':
+          description: API process is live
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, release]
+                properties:
+                  status:
+                    type: string
+                    enum: [OK]
+                  release:
+                    type: string
+                    nullable: true
 
   /api/v1/drug/:
     get:
       tags: [Drug]
       operationId: getDrugStatus
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Drug API status
       description: Returns service metadata and row counts for product and package tables.
       responses:
@@ -64,6 +95,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getProductByNdc
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Get product by product NDC
       parameters:
         - $ref: '#/components/parameters/ProductNdcParam'
@@ -86,6 +118,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getPackagesByProductNdc
+      x-monitor: {mode: excluded, reason: unbounded package collection}
       summary: Get packages by product NDC
       parameters:
         - $ref: '#/components/parameters/ProductNdcParam'
@@ -110,6 +143,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getPackageWithProductByPackageNdc
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Get package by package NDC and embed related product
       parameters:
         - $ref: '#/components/parameters/PackageNdcParam'
@@ -132,6 +166,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getLabelByPackageNdc
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Get package + product and optional label by package NDC
       description: |
         Returns package and product data and, when available, a `label` object.
@@ -160,6 +195,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getLabelByProductNdc
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Get product and optional label by product NDC
       description: |
         Returns product data and, when available, a `label` object.
@@ -186,6 +222,7 @@ paths:
     get:
       tags: [Drug]
       operationId: listProductsAll
+      x-monitor: {mode: excluded, reason: default response can include 49999 product rows}
       summary: List all products
       description: Returns a large product list with default pagination behavior.
       parameters:
@@ -213,6 +250,7 @@ paths:
     get:
       tags: [Drug]
       operationId: listProductsAllByPage
+      x-monitor: {mode: excluded, reason: default response can include 49999 product rows}
       summary: List all products by page
       parameters:
         - $ref: '#/components/parameters/PageParam'
@@ -240,6 +278,7 @@ paths:
     get:
       tags: [Drug]
       operationId: listProductsAllByPageAndSize
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: List all products by page and page size
       parameters:
         - $ref: '#/components/parameters/PageParam'
@@ -268,6 +307,7 @@ paths:
     get:
       tags: [Drug]
       operationId: listProductsByLetter
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: List products by first letter
       parameters:
         - $ref: '#/components/parameters/LetterParam'
@@ -292,6 +332,7 @@ paths:
     get:
       tags: [Drug]
       operationId: listProductsByLetterAndPage
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: List products by first letter and page
       parameters:
         - $ref: '#/components/parameters/LetterParam'
@@ -317,6 +358,7 @@ paths:
     get:
       tags: [Drug]
       operationId: listProductsByLetterPageAndSize
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: List products by first letter, page, and page size
       parameters:
         - $ref: '#/components/parameters/LetterParam'
@@ -343,6 +385,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getProductsByName
+      x-monitor: {mode: excluded, reason: name search has no server-side result limit}
       summary: Search products by name
       description: Returns grouped generic and brand product matches.
       parameters:
@@ -366,6 +409,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getGenericProductsByName
+      x-monitor: {mode: excluded, reason: name search has no server-side result limit}
       summary: Search generic products by name
       parameters:
         - $ref: '#/components/parameters/ProductNameParam'
@@ -388,6 +432,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getBrandProductsByName
+      x-monitor: {mode: excluded, reason: name search has no server-side result limit}
       summary: Search brand products by name
       parameters:
         - $ref: '#/components/parameters/ProductNameParam'
@@ -410,6 +455,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getPackagesByName
+      x-monitor: {mode: excluded, reason: name search has no server-side result limit}
       summary: Search packages by name
       description: Returns grouped generic and brand package matches.
       parameters:
@@ -433,6 +479,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getGenericPackagesByName
+      x-monitor: {mode: excluded, reason: name search has no server-side result limit}
       summary: Search generic packages by name
       parameters:
         - $ref: '#/components/parameters/ProductNameParam'
@@ -455,6 +502,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getBrandPackagesByName
+      x-monitor: {mode: excluded, reason: name search has no server-side result limit}
       summary: Search brand packages by name
       parameters:
         - $ref: '#/components/parameters/ProductNameParam'
@@ -477,6 +525,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getProductsByRxNorm
+      x-monitor: {mode: excluded, reason: RxNorm product lookup has no server-side result limit}
       summary: Get products by RxNorm ID
       parameters:
         - $ref: '#/components/parameters/RxnormIdParam'
@@ -501,6 +550,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getPackagesByRxNorm
+      x-monitor: {mode: excluded, reason: RxNorm package lookup has no server-side result limit}
       summary: Get packages by RxNorm ID
       parameters:
         - $ref: '#/components/parameters/RxnormIdParam'
@@ -525,6 +575,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getConditionsByRxNorm
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Get condition evidence by RxNorm ID
       description: Returns condition evidence derived from local labels and available clinical terminology relationships.
       parameters:
@@ -551,6 +602,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getConditionsByProductNdc
+      x-monitor: {mode: bounded, max_latency_ms: 2000}
       summary: Get condition evidence by product NDC
       description: Returns condition evidence for a product NDC.
       parameters:
@@ -577,6 +629,7 @@ paths:
     get:
       tags: [Drug]
       operationId: getConditionEvidenceByLabelSetId
+      x-monitor: {mode: excluded, reason: label evidence lookup has no server-side result limit}
       summary: Get condition evidence by SPL Set ID
       parameters:
         - name: set_id

@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Public repository hygiene checks.
 
-The check is intentionally based on tracked files only so local scratch files do
-not make CI nondeterministic. It blocks private agent/operator guidance paths and
-obvious secret material from entering the public repository.
+The default check is intentionally based on tracked files only so CI is
+deterministic. The pre-push entry point also scans untracked candidate files.
 """
 
 from __future__ import annotations
@@ -51,10 +50,13 @@ SELF_PATHS = {
 }
 
 
-def tracked_files() -> list[Path]:
-    """Return paths currently tracked by Git."""
+def repository_files(include_untracked: bool = False) -> list[Path]:
+    """Return tracked files and, when requested, untracked candidate files."""
+    arguments = ["git", "ls-files"]
+    if include_untracked:
+        arguments.extend(["--cached", "--others", "--exclude-standard"])
     result = subprocess.run(
-        ["git", "ls-files"],
+        arguments,
         check=True,
         text=True,
         stdout=subprocess.PIPE,
@@ -102,14 +104,15 @@ def check_content(paths: list[Path]) -> list[str]:
 
 def main() -> int:
     """Run all public hygiene checks and return a process exit code."""
-    paths = tracked_files()
+    include_untracked = "--include-untracked" in sys.argv[1:]
+    paths = repository_files(include_untracked)
     errors = check_paths(paths) + check_content(paths)
     if errors:
         print("Public hygiene check failed:")
         for error in errors:
             print(f"- {error}")
         return 1
-    print(f"Public hygiene check passed for {len(paths)} tracked files.")
+    print(f"Public hygiene check passed for {len(paths)} repository files.")
     return 0
 
 

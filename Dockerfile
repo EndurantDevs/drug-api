@@ -1,4 +1,8 @@
-FROM public.ecr.aws/docker/library/python:3.14-slim-trixie
+FROM python:3.13.15-slim-trixie@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
+
+ARG HLTHPRT_SOURCE_COMMIT
+ARG PIP_VERSION=26.2.1
+LABEL org.opencontainers.image.revision=${HLTHPRT_SOURCE_COMMIT}
 
 WORKDIR /wheels
 ADD ./requirements-dev.txt /wheels
@@ -10,7 +14,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends "${LIBAIO_PKG}" gcc g++ make libc6-dev pkg-config git curl nginx \
     && python3 -m venv venv \
     && . venv/bin/activate \
-    && pip install --no-compile --upgrade pip \
+    && pip install --no-compile "pip==${PIP_VERSION}" \
     && pip install --no-compile -r /wheels/requirements-dev.txt -f /wheels \
     && install -d -o nobody -g nogroup -m 755 /run /var/log/nginx \
     && install -d -o nobody -g nogroup -m 700 \
@@ -23,8 +27,7 @@ RUN apt-get update \
     && rm -rf /root/.cache/pip/* \
     && find . -name '*.pyc' -delete \
     && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sfn /opt/venv /opt/venv314
+    && rm -rf /var/lib/apt/lists/*
 
 ARG HLTHPRT_LOG_CFG=./logging.yaml
 ARG HLTHPRT_RELEASE="dev"
@@ -70,7 +73,8 @@ COPY api/ /opt/api/
 COPY db/ /opt/db/
 COPY alembic/ /opt/alembic/
 COPY process/ /opt/process/
-COPY logging.yaml main.py alembic.ini /opt/
+COPY logging.yaml main.py alembic.ini openapi.yaml /opt/
+COPY scripts/monitor_openapi.py /opt/scripts/monitor_openapi.py
 
 USER nobody:nogroup
 
