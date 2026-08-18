@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe every Drug API OpenAPI operation and report aggregate latency."""
+"""Probe each reviewed, bounded Drug API OpenAPI operation."""
 
 from __future__ import annotations
 
@@ -24,13 +24,17 @@ HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put", "tra
 MAX_PAGE = 0
 MAX_RESULTS_PER_PAGE = 5
 MAX_LIMIT = 5
+MAX_REPORTED_FAILURES = 20
+MAX_RESPONSE_BYTES = 65_536
 
 
 @dataclass(frozen=True)
 class ProbeCase:
     operation_id: str
-    path: str
+    path: str | None
     expected_statuses: tuple[int, ...]
+    max_latency_ms: int | None
+    exclusion_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,23 +78,38 @@ def parameter_value(parameter: dict[str, Any]) -> Any:
 
 
 def operation_cases(spec: dict[str, Any]) -> list[ProbeCase]:
-    """Build one request from every documented read-only operation."""
+    """Discover every operation, materializing only explicitly bounded GETs."""
     cases: list[ProbeCase] = []
     for path, path_item in sorted((spec.get("paths") or {}).items()):
         shared_parameters = path_item.get("parameters") or []
         for method, operation in sorted(path_item.items()):
             if method not in HTTP_METHODS:
                 continue
-            if method != "get":
-                raise ValueError(f"{method.upper()} {path} needs an explicit monitoring safety policy")
-            cases.append(
-                build_case(
-                    spec,
-                    path,
-                    operation,
-                    [*shared_parameters, *(operation.get("parameters") or [])],
+            policy = operation.get("x-monitor")
+            mode = policy.get("mode") if isinstance(policy, dict) else None
+            operation_id = str(operation.get("operationId") or f"{method}_{path}")
+            if mode == "excluded":
+                reason = policy.get("reason")
+                if not isinstance(reason, str) or not reason:
+                    raise ValueError(f"{method.upper()} {path} exclusion needs a reason")
+                cases.append(ProbeCase(operation_id, None, (), None, reason))
+            elif mode == "bounded":
+                if method != "get":
+                    raise ValueError(f"{method.upper()} {path}: only GET operations may be monitored live")
+                max_latency_ms = policy.get("max_latency_ms")
+                if isinstance(max_latency_ms, bool) or not isinstance(max_latency_ms, int) or max_latency_ms <= 0:
+                    raise ValueError(f"GET {path} needs a positive x-monitor.max_latency_ms")
+                cases.append(
+                    build_case(
+                        spec,
+                        path,
+                        operation,
+                        [*shared_parameters, *(operation.get("parameters") or [])],
+                        max_latency_ms,
+                    )
                 )
-            )
+            else:
+                raise ValueError(f"{method.upper()} {path} needs an explicit monitoring policy")
     if not cases:
         raise ValueError("OpenAPI contract has no monitoring cases")
     return cases
@@ -101,6 +120,7 @@ def build_case(
     path: str,
     operation: dict[str, Any],
     raw_parameters: list[dict[str, Any]],
+    max_latency_ms: int,
 ) -> ProbeCase:
     """Materialize documented path and query parameter examples."""
     query_parameters: list[tuple[str, str]] = []
@@ -128,7 +148,7 @@ def build_case(
         sorted(
             int(status)
             for status in (operation.get("responses") or {})
-            if str(status).isdigit()
+            if str(status).isdigit() and 200 <= int(status) < 300
         )
     )
     if not expected_statuses:
@@ -137,6 +157,7 @@ def build_case(
         operation_id=str(operation.get("operationId") or f"get_{path}"),
         path=rendered_path,
         expected_statuses=expected_statuses,
+        max_latency_ms=max_latency_ms,
     )
 
 
@@ -167,37 +188,86 @@ def _integer_value(value: Any) -> int:
         raise ValueError(f"list bound must be an integer: {value!r}") from error
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Return redirects to the probe instead of issuing a second request."""
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def open_no_redirect(request: urllib.request.Request, timeout: float):
+    """Open one request without redirect handling."""
+    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+
+
+def request_url(base_url: str, case_path: str) -> str:
+    """Return a URL constrained to the configured service origin."""
+    parsed_base = urllib.parse.urlsplit(base_url)
+    if (
+        parsed_base.scheme not in {"http", "https"}
+        or not parsed_base.netloc
+        or parsed_base.query
+        or parsed_base.fragment
+        or not case_path.startswith("/")
+        or case_path.startswith("//")
+    ):
+        raise ValueError("monitor case path must stay on the configured origin")
+    url = base_url.rstrip("/") + case_path
+    parsed_url = urllib.parse.urlsplit(url)
+    if (parsed_url.scheme, parsed_url.netloc) != (parsed_base.scheme, parsed_base.netloc):
+        raise ValueError("monitor case path must stay on the configured origin")
+    return url
+
+
+def response_error(response_body: bytes, content_type: str) -> str | None:
+    """Return an error for a non-JSON or oversized successful response."""
+    if "application/json" not in content_type.lower() and "+json" not in content_type.lower():
+        return "invalid_content_type"
+    if len(response_body) > MAX_RESPONSE_BYTES:
+        return "response_too_large"
+    try:
+        json.loads(response_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return "invalid_json"
+    return None
+
+
 def execute_case(
     case: ProbeCase,
     *,
     base_url: str,
-    api_key: str,
     timeout: float,
 ) -> ProbeResult:
     """Execute one GET without retaining response bodies."""
     headers_by_name = {"Accept": "application/json", "User-Agent": "HealthPortaMonitor/1.0"}
-    if api_key:
-        headers_by_name["Authorization"] = f"Bearer {api_key}"
+    if case.path is None:
+        raise ValueError(f"{case.operation_id} is excluded from live monitoring")
     request = urllib.request.Request(
-        base_url.rstrip("/") + case.path,
+        request_url(base_url, case.path),
         headers=headers_by_name,
         method="GET",
     )
     started = time.perf_counter()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            response.read(1)
+        with open_no_redirect(request, timeout) as response:
+            response_body = response.read(MAX_RESPONSE_BYTES + 1)
             status = response.status
-            error = None
+            content_type = str(response.headers.get("Content-Type", ""))
+            error = response_error(response_body, content_type)
     except urllib.error.HTTPError as exc:
         status = exc.code
-        error = None
+        error = f"HTTP {status}"
         exc.close()
     except (OSError, TimeoutError, urllib.error.URLError) as exc:
         status = None
         error = type(exc).__name__
     elapsed_ms = max(0, round((time.perf_counter() - started) * 1000))
-    is_ok = status is not None and 200 <= status < 300
+    is_ok = (
+        status is not None
+        and 200 <= status < 300
+        and status in case.expected_statuses
+        and error is None
+    )
     return ProbeResult(case.operation_id, status, elapsed_ms, is_ok, error)
 
 
@@ -213,48 +283,76 @@ def run_cases(
     cases: list[ProbeCase],
     *,
     base_url: str,
-    api_key: str,
     timeout: float,
     workers: int,
-    max_p95_ms: int,
 ) -> dict[str, Any]:
     """Run all cases and return a redacted aggregate result."""
     if workers < 1 or timeout <= 0:
         raise ValueError("workers and timeout must be positive")
+    live_cases = [case for case in cases if case.path is not None]
+    if not live_cases:
+        raise ValueError("OpenAPI contract has no bounded live monitoring cases")
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         probe_results = list(
             executor.map(
                 lambda case: execute_case(
                     case,
                     base_url=base_url,
-                    api_key=api_key,
                     timeout=timeout,
                 ),
-                cases,
+                live_cases,
             )
         )
     p95_ms = percentile_95([probe_result.elapsed_ms for probe_result in probe_results])
-    failures = [asdict(probe_result) for probe_result in probe_results if not probe_result.ok]
-    is_latency_ok = max_p95_ms <= 0 or p95_ms <= max_p95_ms
+    all_failures = []
+    for case, probe_result in zip(live_cases, probe_results):
+        if probe_result.ok and probe_result.elapsed_ms <= case.max_latency_ms:
+            continue
+        failure = asdict(probe_result)
+        failure["ok"] = False
+        failure["max_latency_ms"] = case.max_latency_ms
+        if probe_result.ok:
+            failure["error"] = "latency budget exceeded"
+        all_failures.append(failure)
+    failures = all_failures[:MAX_REPORTED_FAILURES]
     return {
-        "ok": not failures and is_latency_ok,
+        "ok": not all_failures,
         "operation_count": len(cases),
-        "failure_count": len(failures),
+        "probed_operation_count": len(live_cases),
+        "excluded_operation_count": len(cases) - len(live_cases),
+        "failure_count": len(all_failures),
         "p95_ms": p95_ms,
-        "max_p95_ms": max_p95_ms,
-        "failures": failures[:20],
+        "first_failure_operation_id": all_failures[0]["operation_id"] if all_failures else None,
+        "failure_truncation_count": len(all_failures) - len(failures),
+        "failures": failures,
     }
 
 
 def push_summary(push_url: str, summary: dict[str, Any]) -> None:
     """Publish the aggregate result to an Uptime Kuma Push monitor."""
     parsed_url = urllib.parse.urlsplit(push_url)
-    if parsed_url.query or parsed_url.fragment:
-        raise ValueError("Kuma push URL must not contain a query or fragment")
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.netloc
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        raise ValueError("Kuma push URL must be a bare HTTP(S) URL")
     message = (
         f"operations={summary['operation_count']} failures={summary['failure_count']} "
-        f"p95_ms={summary['p95_ms']}"
+        f"p95_ms={summary['p95_ms']} first_failure={summary['first_failure_operation_id'] or '-'} "
+        f"failure_truncated={summary['failure_truncation_count']}"
     )
+    if summary.get("failures"):
+        first_failure = summary["failures"][0]
+        status = first_failure.get("status")
+        error = first_failure.get("error") or "-"
+        message += (
+            f" status={status if status is not None else '-'}"
+            f" error={error}"
+            f" elapsed_ms={first_failure['elapsed_ms']}"
+            f" budget_ms={first_failure['max_latency_ms']}"
+        )
     separator = "&" if "?" in push_url else "?"
     url = push_url + separator + urllib.parse.urlencode(
         {
@@ -264,7 +362,7 @@ def push_summary(push_url: str, summary: dict[str, Any]) -> None:
         }
     )
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
+        with open_no_redirect(urllib.request.Request(url, method="GET"), 10) as response:
             if response.status >= 300:
                 raise RuntimeError("Kuma push failed")
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -278,11 +376,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--openapi", type=Path, default=DEFAULT_OPENAPI_PATH)
     parser.add_argument("--base-url", default=os.getenv("MONITOR_BASE_URL", ""))
-    parser.add_argument("--api-key", default=os.getenv("MONITOR_API_KEY", ""))
     parser.add_argument("--push-url", default=os.getenv("KUMA_PUSH_URL", ""))
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--max-p95-ms", type=int, default=0)
     parser.add_argument("--check", action="store_true")
     return parser.parse_args()
 
@@ -292,17 +388,24 @@ def main() -> int:
     args = parse_args()
     cases = operation_cases(load_spec(args.openapi))
     if args.check:
-        print(json.dumps({"safe_operation_count": len(cases)}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "contract_operation_count": len(cases),
+                    "excluded_operation_count": sum(case.path is None for case in cases),
+                    "safe_operation_count": sum(case.path is not None for case in cases),
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     if not args.base_url:
         raise SystemExit("--base-url or MONITOR_BASE_URL is required")
     summary = run_cases(
         cases,
         base_url=args.base_url,
-        api_key=args.api_key,
         timeout=args.timeout,
         workers=args.workers,
-        max_p95_ms=args.max_p95_ms,
     )
     print(json.dumps(summary, sort_keys=True))
     if args.push_url:
