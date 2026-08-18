@@ -1,212 +1,214 @@
 #!/usr/bin/env bash
+# Run the locally reproducible CI gates with the same named modes used by CI.
 set -euo pipefail
 
-readonly POSTGRES_IMAGE='postgres:18'
-readonly REDIS_IMAGE='redis:7'
-readonly SEMGREP_IMAGE='returntocorp/semgrep-agent@sha256:2ed984f89000f77516016248700ad91681cb89bbe2adbdecd1d38dc84394adbb'
-readonly PYTHON_LINE_MARGIN=5
-readonly PYTHON_BRANCH_MARGIN=5
+readonly PYTHON_VERSION='3.13.15'
+readonly PIP_VERSION='26.2.1'
+readonly POSTGRES_IMAGE='postgres:18@sha256:06cad38a5d9f5d24b4d83d86def30795d5e4b757fedbf5281172b576dedcd941'
+readonly REDIS_IMAGE='redis:7@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73'
+readonly RUNTIME_BASE_IMAGE='python:3.13.15-slim-trixie@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a'
+readonly SEMGREP_IMAGE='returntocorp/semgrep@sha256:e1e0cde346c758f755e1bd28fd0ea43cde9d523b59a040611a6bdde2f84bb3dd'
 
-repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-cd "$repository_root"
+mode="${1:-all}"
+if [[ -n "${PYTHON_BIN:-}" ]]; then
+    python_bin="$PYTHON_BIN"
+elif command -v python3.13 >/dev/null; then
+    python_bin=python3.13
+else
+    python_bin=python3
+fi
+candidate_sha=''
+runtime_image_id=''
+artifact_root=''
 
-usage() {
-  cat <<'EOF'
-Usage: scripts/ci/prepush [hygiene|quality|test|coverage|security|postgres|redis|all]
-
-With no mode, installs the CI dependencies, starts the CI PostgreSQL and Redis
-services, and runs every locally reproducible required CI family for a clean,
-committed HEAD. CI invokes the same family modes.
-EOF
-}
-
-fail() {
-  echo "prepush: $*" >&2
-  exit 2
+base_sha() {
+    if [[ -n "${BASE_SHA:-}" && ! "$BASE_SHA" =~ ^0+$ ]]; then
+        printf '%s\n' "$BASE_SHA"
+    else
+        git merge-base HEAD origin/main
+    fi
 }
 
 require_frozen_candidate() {
-  local candidate_sha="$1"
-  [[ "$(git rev-parse HEAD)" == "$candidate_sha" ]] && \
-    [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || \
-    fail "candidate changed while the pre-push gate was running"
+    [[ "$(git rev-parse HEAD)" == "$candidate_sha" ]] || {
+        printf '%s\n' 'prepush: candidate HEAD changed while the gate was running' >&2
+        return 2
+    }
+    [[ -z "$(git status --porcelain --untracked-files=normal)" ]] || {
+        printf '%s\n' 'prepush: the exact gate requires a clean committed candidate' >&2
+        return 2
+    }
 }
 
-require_python_314() {
-  python3 -c 'import sys; raise SystemExit(sys.version_info[:2] != (3, 14))' || \
-    fail "Python 3.14 is required"
+require_python_version() {
+    "$python_bin" - "$PYTHON_VERSION" <<'PY'
+import platform
+import sys
+
+expected_python = sys.argv[1]
+if platform.python_version() != expected_python:
+    raise SystemExit(f"Python {expected_python} is required, got {platform.python_version()}")
+PY
 }
 
-run_hygiene() {
-  if [[ -n "${GITHUB_EVENT_PATH:-}" ]]; then
-    python3 scripts/check_commit_messages.py --event "$GITHUB_EVENT_PATH"
-  else
-    python3 scripts/check_commit_messages.py --last 1
-  fi
-  python3 scripts/ci/public_hygiene.py
+require_python() {
+    require_python_version
+    "$python_bin" - "$PIP_VERSION" <<'PY'
+from importlib.metadata import version
+import sys
+
+expected_pip = sys.argv[1]
+if version("pip") != expected_pip:
+    raise SystemExit(f"pip {expected_pip} is required, got {version('pip')}")
+PY
 }
 
-run_quality() {
-  isort --check-only api db process tests main.py
-  flake8 api db process tests main.py
-  pylint --errors-only --disable=no-member api db process tests main.py
-  python -m compileall api process db scripts main.py
-  python scripts/readability_budget.py
-  python scripts/ci/request_time_external_call_guard.py
+install() {
+    "$python_bin" -m pip install "pip==$PIP_VERSION"
+    "$python_bin" -m pip install -r requirements-dev.txt
 }
 
-run_test() {
-  python -m coverage run --branch --source=. -m pytest -q
+public_hygiene() {
+    if [[ -n "${GITHUB_EVENT_PATH:-}" ]]; then
+        "$python_bin" scripts/check_commit_messages.py --event "$GITHUB_EVENT_PATH"
+    elif [[ -n "$(git rev-list "$(base_sha)..HEAD")" ]]; then
+        "$python_bin" scripts/check_commit_messages.py --range "$(base_sha)..HEAD"
+    else
+        printf '%s\n' "No commits beyond the target base; commit-message validation is not applicable."
+    fi
+    "$python_bin" scripts/ci/public_hygiene.py --include-untracked
 }
 
-run_coverage() {
-  local coverage_file="${COVERAGE_FILE:-.coverage}"
-  local report_path="${COVERAGE_REPORT:-test-coverage-python.json}"
-  local provenance_path="${COVERAGE_PROVENANCE_OUTPUT:-coverage-provenance.json}"
-  local forecast_path="${COVERAGE_FORECAST_OUTPUT:-${RUNNER_TEMP:-/tmp}/coverage-forecast.json}"
+quality() {
+    "$python_bin" -m isort --check-only api db process tests scripts/monitor_openapi.py main.py
+    "$python_bin" -m flake8 api db process tests scripts/monitor_openapi.py main.py
+    "$python_bin" -m pylint --errors-only --disable=no-member api db process tests scripts/monitor_openapi.py main.py
+    "$python_bin" -m compileall api process db scripts main.py
+    "$python_bin" scripts/readability_budget.py
+    "$python_bin" scripts/ci/request_time_external_call_guard.py
+}
 
-  python scripts/coverage_ratchet.py --self-test
-  [[ -f "$coverage_file" ]] || return 0
-  [[ -n "${BASE_SHA:-}" ]] || fail "coverage requires a target base SHA"
-  COVERAGE_FILE="$coverage_file" python -m coverage json -o "$report_path"
-  python scripts/coverage_forecast.py write-provenance \
-    --base "$BASE_SHA" \
-    --report "$report_path" \
-    --output "$provenance_path"
-  python scripts/coverage_forecast.py forecast \
-    --base "$BASE_SHA" \
-    --report "$report_path" \
-    --provenance "$provenance_path" \
-    --output "$forecast_path"
-  python - "$forecast_path" "$PYTHON_LINE_MARGIN" "$PYTHON_BRANCH_MARGIN" <<'PY'
+test_run() {
+    "$python_bin" -m coverage run --branch --source=. -m pytest -q
+}
+
+coverage_report() {
+    [[ -f .coverage ]] || return 0
+    "$python_bin" -m coverage json -o test-coverage-python.json
+}
+
+coverage_provenance() {
+    [[ -f test-coverage-python.json ]] || return 0
+    "$python_bin" scripts/coverage_forecast.py write-provenance \
+        --base "$(base_sha)" \
+        --report test-coverage-python.json \
+        --output coverage-provenance.json
+}
+
+coverage_forecast() {
+    "$python_bin" scripts/coverage_ratchet.py --self-test
+    [[ -f test-coverage-python.json ]] || return 0
+    local output="${COVERAGE_FORECAST_OUTPUT:-coverage-forecast.json}"
+    local margins="${COVERAGE_MARGIN_OUTPUT:-coverage-margins.txt}"
+    "$python_bin" scripts/coverage_forecast.py forecast \
+        --base "$(base_sha)" \
+        --report test-coverage-python.json \
+        --provenance coverage-provenance.json \
+        --output "$output"
+    "$python_bin" -c '
 import json
 from pathlib import Path
 import sys
 
-metrics = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["reports"]["python"]["metrics"]
-required = {"lines": int(sys.argv[2]), "branches": int(sys.argv[3])}
-failures = []
-for name, minimum in required.items():
+metrics = json.load(open(sys.argv[1], encoding="utf-8"))["reports"]["python"]["metrics"]
+rows = []
+for name in ("lines", "branches"):
     margin = metrics[name]["margin"]
-    print(f"python {name} coverage margin: {margin} (required: {minimum})")
-    if margin < minimum:
-        failures.append(f"{name} margin {margin} is below {minimum}")
-if failures:
-    raise SystemExit("coverage safety margin failed: " + "; ".join(failures))
-PY
+    if margin < 5:
+        raise SystemExit(f"coverage forecast {name} margin is below 5")
+    rows.append(f"python_{name}_margin={margin}")
+Path(sys.argv[2]).write_text("\n".join(rows) + "\n", encoding="utf-8")
+' "$output" "$margins"
 }
 
-run_security() {
-  pip-audit -r requirements.txt
-  pip-audit -r requirements-dev.txt
+security() {
+    "$python_bin" -m pip_audit -r requirements.txt
+    "$python_bin" -m pip_audit -r requirements-dev.txt
+    docker run --rm --network none --volume "$PWD:/src:ro" --workdir /src \
+        "$SEMGREP_IMAGE" \
+        semgrep --config .semgrep.yml --no-git-ignore .
 }
 
-run_semgrep() {
-  local git_common_dir
-  git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
-  docker run --rm --platform linux/amd64 \
-    --volume "$repository_root:$repository_root" \
-    --volume "$git_common_dir:$git_common_dir" \
-    --workdir "$repository_root" \
-    --env INPUT_CONFIG=.semgrep.yml \
-    --env GITHUB_WORKSPACE="$repository_root" \
-    --env GITHUB_EVENT_NAME=push \
-    --env GITHUB_SHA="$(git rev-parse HEAD)" \
-    "$SEMGREP_IMAGE"
+postgres18() {
+    "$python_bin" -m alembic upgrade head
+    "$python_bin" -m pytest -q \
+        tests/process/test_import_table_switching.py \
+        tests/process/test_ndc_rxnorm_mapping.py \
+        tests/process/test_drug_indications.py
 }
 
-run_postgres() {
-  alembic upgrade head
-  python -m pytest -q \
-    tests/process/test_import_table_switching.py \
-    tests/process/test_ndc_rxnorm_mapping.py \
-    tests/process/test_drug_indications.py
-}
-
-run_redis() {
-  python - <<'PY'
+redis() {
+    "$python_bin" -c '
 import asyncio
 import os
-
 from redis.asyncio import Redis
 
-
-async def main() -> None:
+async def main():
     redis = Redis.from_url(os.environ["HLTHPRT_REDIS_ADDRESS"], decode_responses=True)
-    await redis.rpush("arq:ci-smoke", "healthporta-ci")
+    await redis.rpush("arq:ci-smoke", "drug-api-ci")
     assert await redis.llen("arq:ci-smoke") == 1
     await redis.delete("arq:ci-smoke")
     await redis.aclose()
 
-
 asyncio.run(main())
-PY
-  python -m pytest -q tests/test_control_workers.py tests/test_import_status_events.py
+'
+    "$python_bin" -m pytest -q tests/test_control_workers.py tests/test_import_status_events.py
 }
 
-run_all() {
-  command -v docker >/dev/null || fail "all requires Docker"
-  command -v git >/dev/null || fail "all requires Git"
-  command -v python3 >/dev/null || fail "all requires Python 3"
-  require_python_314
+runtime_image() {
+    local source_revision image_revision
+    grep -Fqx "FROM $RUNTIME_BASE_IMAGE" Dockerfile
+    source_revision="${HLTHPRT_SOURCE_COMMIT:-$(git rev-parse HEAD)}"
+    image_revision="drug-api-runtime:${source_revision}"
+    docker build \
+        --build-arg "HLTHPRT_SOURCE_COMMIT=$source_revision" \
+        --tag "$image_revision" \
+        --file Dockerfile .
+    [[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_revision")" == "$source_revision" ]]
+    runtime_image_id="$(docker image inspect --format '{{.Id}}' "$image_revision")"
+    [[ "$runtime_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+    docker run --rm --entrypoint /opt/venv/bin/python "$image_revision" \
+        -c 'import main, sanic'
+    docker run --rm --entrypoint /opt/venv/bin/python "$image_revision" /opt/scripts/monitor_openapi.py --check
+}
 
-  local candidate_sha base_sha artifact_root postgres_name redis_name postgres_port redis_port
-  candidate_sha="$(git rev-parse HEAD)"
-  base_sha="${BASE_SHA:-$(git rev-parse origin/main)}"
-  artifact_root="${PREPUSH_ARTIFACT_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/drug-api-prepush.XXXXXX")}"
-  postgres_name="drug-api-prepush-postgres-$$"
-  redis_name="drug-api-prepush-redis-$$"
-  require_frozen_candidate "$candidate_sha"
-
-  python3 -m venv "$artifact_root/venv"
-  export PATH="$artifact_root/venv/bin:$PATH"
-  python -m pip install --upgrade pip
-  python -m pip install -r requirements-dev.txt
-
-  run_hygiene
-  run_quality
-  run_test
-  BASE_SHA="$base_sha" \
-    COVERAGE_PROVENANCE_OUTPUT="$artifact_root/coverage-provenance.json" \
-    COVERAGE_FORECAST_OUTPUT="$artifact_root/coverage-forecast.json" \
-  run_coverage
-  run_security
-  run_semgrep
-
-  cleanup() {
-    docker rm -f "$postgres_name" "$redis_name" >/dev/null 2>&1 || true
-  }
-  trap cleanup EXIT INT TERM
-  docker pull "$POSTGRES_IMAGE"
-  docker pull "$REDIS_IMAGE"
-  docker run --detach --name "$postgres_name" \
-    --env POSTGRES_PASSWORD=postgres \
-    --env POSTGRES_DB=healthporta_drug_ci \
-    --publish 127.0.0.1::5432 \
-    "$POSTGRES_IMAGE" >/dev/null
-  docker run --detach --name "$redis_name" \
-    --publish 127.0.0.1::6379 \
-    "$REDIS_IMAGE" >/dev/null
-
-  for _ in {1..30}; do
-    docker exec "$postgres_name" pg_isready -U postgres -d healthporta_drug_ci >/dev/null 2>&1 && break
-    sleep 1
-  done
-  docker exec "$postgres_name" pg_isready -U postgres -d healthporta_drug_ci >/dev/null || \
-    fail "PostgreSQL service was not ready within 30 seconds"
-  for _ in {1..30}; do
-    [[ "$(docker exec "$redis_name" redis-cli ping 2>/dev/null)" == PONG ]] && break
-    sleep 1
-  done
-  [[ "$(docker exec "$redis_name" redis-cli ping 2>/dev/null)" == PONG ]] || \
-    fail "Redis service was not ready within 30 seconds"
-
-  postgres_port="$(docker port "$postgres_name" 5432/tcp | awk -F: 'END {print $NF}')"
-  redis_port="$(docker port "$redis_name" 6379/tcp | awk -F: 'END {print $NF}')"
-  [[ "$postgres_port" =~ ^[0-9]+$ && "$redis_port" =~ ^[0-9]+$ ]] || \
-    fail "could not resolve local service ports"
-
-  HLTHPRT_ENVIRONMENT=test \
+local_services() {
+    local postgres_name redis_name postgres_port redis_port
+    postgres_name="drug-api-prepush-postgres-$$"
+    redis_name="drug-api-prepush-redis-$$"
+    cleanup() {
+        docker rm --force "$postgres_name" "$redis_name" >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+    docker run --detach --rm --name "$postgres_name" \
+        --env POSTGRES_PASSWORD=postgres \
+        --env POSTGRES_DB=healthporta_drug_ci \
+        --publish 127.0.0.1::5432 "$POSTGRES_IMAGE" >/dev/null
+    docker run --detach --rm --name "$redis_name" \
+        --publish 127.0.0.1::6379 "$REDIS_IMAGE" >/dev/null
+    for attempt in $(seq 1 60); do
+        docker exec "$postgres_name" pg_isready -U postgres -d healthporta_drug_ci >/dev/null && break
+        [[ "$attempt" != 60 ]] || return 1
+        sleep 1
+    done
+    for attempt in $(seq 1 60); do
+        docker exec "$redis_name" redis-cli ping >/dev/null && break
+        [[ "$attempt" != 60 ]] || return 1
+        sleep 1
+    done
+    postgres_port="$(docker port "$postgres_name" 5432/tcp | sed 's/.*://')"
+    redis_port="$(docker port "$redis_name" 6379/tcp | sed 's/.*://')"
+    HLTHPRT_ENVIRONMENT=test \
     HLTHPRT_DB_DRIVER=asyncpg \
     HLTHPRT_DB_HOST=127.0.0.1 \
     HLTHPRT_DB_PORT="$postgres_port" \
@@ -214,47 +216,77 @@ run_all() {
     HLTHPRT_DB_PASSWORD=postgres \
     HLTHPRT_DB_DATABASE=healthporta_drug_ci \
     HLTHPRT_DB_SCHEMA=rx_data \
-    DB_SCHEMA=rx_data \
-    run_postgres
-  HLTHPRT_REDIS_ADDRESS="redis://127.0.0.1:$redis_port" run_redis
-  cleanup
-  trap - EXIT INT TERM
-
-  require_frozen_candidate "$candidate_sha"
-  python -m pip freeze > "$artifact_root/resolved-dependencies.txt"
-  cat > "$artifact_root/receipt.txt" <<EOF
-candidate_sha=$candidate_sha
-base_sha=$base_sha
-python_version=$(python --version 2>&1)
-pytest_version=$(python -m pytest --version)
-coverage_version=$(python -m coverage --version | head -1)
-postgres_image=$POSTGRES_IMAGE
-redis_image=$REDIS_IMAGE
-semgrep_image=$SEMGREP_IMAGE
-postgres_image_id=$(docker image inspect --format '{{.Id}}' "$POSTGRES_IMAGE")
-redis_image_id=$(docker image inspect --format '{{.Id}}' "$REDIS_IMAGE")
-families=hygiene,quality,test,coverage,security,semgrep,postgres,redis
-python_line_margin_required=$PYTHON_LINE_MARGIN
-python_branch_margin_required=$PYTHON_BRANCH_MARGIN
-result=passed
-EOF
-  echo "prepush: all required local CI families passed for $candidate_sha"
-  echo "prepush: receipt and coverage forecast: $artifact_root"
+    DB_SCHEMA=rx_data postgres18
+    HLTHPRT_REDIS_ADDRESS="redis://127.0.0.1:$redis_port" redis
+    cleanup
+    trap - EXIT
 }
 
-mode="${1:-all}"
-if [[ $# -gt 0 ]]; then
-  shift
-fi
+write_receipt() {
+    local resolved_base_sha="$1"
+    local receipt="$artifact_root/receipt.txt"
+    mkdir -p "$artifact_root"
+    {
+        printf 'candidate_sha=%s\n' "$candidate_sha"
+        printf 'base_sha=%s\n' "$resolved_base_sha"
+        printf 'python_version=%s\n' "$PYTHON_VERSION"
+        printf 'pip_version=%s\n' "$PIP_VERSION"
+        printf 'runtime_base_image=%s\n' "$RUNTIME_BASE_IMAGE"
+        printf 'runtime_image_id=%s\n' "$runtime_image_id"
+        printf 'postgres_image=%s\n' "$POSTGRES_IMAGE"
+        printf 'redis_image=%s\n' "$REDIS_IMAGE"
+        printf 'semgrep_image=%s\n' "$SEMGREP_IMAGE"
+        printf 'requirements_sha256=%s\n' "$("$python_bin" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' requirements.txt)"
+        printf 'requirements_dev_sha256=%s\n' "$("$python_bin" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' requirements-dev.txt)"
+        printf '%s\n' 'command=scripts/ci/prepush all'
+        cat coverage-margins.txt
+        printf '%s\n' 'result=passed'
+    } >"$receipt"
+    printf 'prepush: receipt: %s\n' "$receipt"
+}
+
+all() {
+    local resolved_base_sha
+    candidate_sha="$(git rev-parse HEAD)"
+    resolved_base_sha="$(git rev-parse "$(base_sha)^{commit}")"
+    git merge-base --is-ancestor "$resolved_base_sha" "$candidate_sha"
+    export BASE_SHA="$resolved_base_sha"
+    artifact_root="${PREPUSH_ARTIFACT_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/drug-api-prepush.XXXXXX")}"
+    require_frozen_candidate
+    install
+    require_python
+    public_hygiene
+    quality
+    test_run
+    coverage_report
+    coverage_provenance
+    coverage_forecast
+    security
+    runtime_image
+    local_services
+    require_frozen_candidate
+    write_receipt "$resolved_base_sha"
+    printf 'prepush: passed for %s\n' "$candidate_sha"
+}
+
 case "$mode" in
-  hygiene) run_hygiene "$@" ;;
-  quality) run_quality "$@" ;;
-  test) run_test "$@" ;;
-  coverage) run_coverage "$@" ;;
-  security) run_security "$@" ;;
-  postgres) run_postgres "$@" ;;
-  redis) run_redis "$@" ;;
-  all) run_all "$@" ;;
-  -h|--help|help) usage ;;
-  *) usage >&2; fail "unknown mode: $mode" ;;
+    public-hygiene|runtime-image) ;;
+    all|install) require_python_version ;;
+    *) require_python ;;
+esac
+
+case "$mode" in
+    all) all ;;
+    install) install ;;
+    public-hygiene) public_hygiene ;;
+    quality) quality ;;
+    test-run) test_run ;;
+    coverage-report) coverage_report ;;
+    coverage-provenance) coverage_provenance ;;
+    coverage-forecast) coverage_forecast ;;
+    security) security ;;
+    postgres18) postgres18 ;;
+    redis) redis ;;
+    runtime-image) runtime_image ;;
+    *) printf 'usage: %s {all|install|public-hygiene|quality|test-run|coverage-report|coverage-provenance|coverage-forecast|security|postgres18|redis|runtime-image}\n' "$0" >&2; exit 2 ;;
 esac

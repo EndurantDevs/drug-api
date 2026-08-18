@@ -43,6 +43,9 @@ htmlcov/
 .coverage
 .coverage.*
 test-coverage-*.json
+coverage-forecast.json
+coverage-provenance.json
+coverage-margins.txt
 !test-coverage-baseline.json
 .cache
 nosetests.xml

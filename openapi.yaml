@@ -30,7 +30,7 @@ paths:
       description: Returns service metadata and a lightweight DB connectivity check.
       responses:
         '200':
-          description: Service and DB health status
+          description: Service and database are healthy
           content:
             application/json:
               schema:
@@ -38,8 +38,36 @@ paths:
               examples:
                 ok:
                   $ref: '#/components/examples/HealthcheckOk'
+        '503':
+          description: Service is running but the database check failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthcheckStatus'
         '500':
           $ref: '#/components/responses/InternalErrorJson'
+
+  /api/v1/healthcheck/live:
+    get:
+      tags: [Healthcheck]
+      operationId: getLiveness
+      summary: Process liveness
+      description: Confirms that the API process can answer requests without probing dependencies.
+      responses:
+        '200':
+          description: API process is live
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, release]
+                properties:
+                  status:
+                    type: string
+                    enum: [OK]
+                  release:
+                    type: string
+                    nullable: true
 
   /api/v1/drug/:
     get:

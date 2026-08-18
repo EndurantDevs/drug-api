@@ -73,13 +73,19 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_ENV_FROM_SECRET", "drug-api-secret")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_PVC_NAME", "import-workdir")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_PVC_MOUNT_PATH", "/work")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_SERVICE_ACCOUNT", "drug-api-worker")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE_PULL_SECRET", "ghcr-pull,mirror-pull")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_CPU_REQUEST", "100m")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_MEMORY_LIMIT", "256Mi")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_ACTIVE_DEADLINE_SECONDS", "43200")
     monkeypatch.setenv("HLTHPRT_IMPORT_NODE_ID", "local_drug")
     monkeypatch.setattr(control_workers, "_kubernetes_configured", lambda: True)
     monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "healthporta-dev")
     monkeypatch.setattr(control_workers, "_kubernetes_request", fake_request)
 
-    ensure_result = control_workers.ensure_worker({"importer": "ndc", "run_id": "run_123"})
+    ensure_result = control_workers.ensure_worker(
+        {"importer": "ndc", "import_id": "import_123", "run_id": "run_123"}
+    )
 
     assert ensure_result["status"] == "started"
     post = next(call for call in calls if call[0] == "POST")
@@ -89,10 +95,18 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     container = job["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == "ghcr.io/endurantdevs/drug-api:dev"
     assert container["command"][-2:] == ["process.NDC", "--burst"]
+    assert {"name": "HLTHPRT_IMPORT_ID_OVERRIDE", "value": "import_123"} in container["env"]
     assert {"configMapRef": {"name": "drug-api-config"}} in container["envFrom"]
     assert {"secretRef": {"name": "drug-api-secret"}} in container["envFrom"]
+    assert container["resources"] == {
+        "requests": {"cpu": "100m"},
+        "limits": {"memory": "256Mi"},
+    }
     assert container["volumeMounts"] == [{"name": "import-workdir", "mountPath": "/work"}]
-    assert job["spec"]["template"]["spec"]["volumes"] == [
+    pod_spec = job["spec"]["template"]["spec"]
+    assert pod_spec["serviceAccountName"] == "drug-api-worker"
+    assert pod_spec["imagePullSecrets"] == [{"name": "ghcr-pull"}, {"name": "mirror-pull"}]
+    assert pod_spec["volumes"] == [
         {"name": "import-workdir", "persistentVolumeClaim": {"claimName": "import-workdir"}}
     ]
     assert job["spec"]["activeDeadlineSeconds"] == 43200
