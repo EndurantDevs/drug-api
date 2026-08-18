@@ -31,3 +31,10 @@ hand-written commits.
 Run the focused tests for the area you changed before opening a pull request.
 For importer or schema changes, include a smoke run or a short note explaining
 why one was not run.
+
+After committing the candidate and before pushing, run the same aggregate gate
+used by CI:
+
+```bash
+scripts/ci/prepush
+```
