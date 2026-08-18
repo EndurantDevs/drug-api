@@ -1,11 +1,14 @@
 name: Queue dev deploy
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
     branches: [main]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -13,9 +16,98 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize:
+    name: Authorize tested source
+    if: >-
+      ${{
+        (
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/main'
+        ) ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_repository.full_name == github.repository
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      deploy_sha: ${{ steps.authorize.outputs.deploy_sha }}
+    steps:
+      - name: Authorize exact tested source SHA
+        id: authorize
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const expectedRepository = `${owner}/${repo}`
+            const expectedWorkflowPath = '.github/workflows/ci.yml'
+            const main = await github.rest.repos.getBranch({owner, repo, branch: 'main'})
+            const mainSha = main.data.commit.sha
+            let deploySha
+
+            if (context.eventName === 'workflow_run') {
+              const run = context.payload.workflow_run
+              const trusted =
+                run.conclusion === 'success' &&
+                run.event === 'push' &&
+                run.path === expectedWorkflowPath &&
+                run.head_branch === 'main' &&
+                run.head_repository?.full_name === expectedRepository &&
+                run.repository?.full_name === expectedRepository
+              if (!trusted) {
+                core.setFailed('Refusing an untrusted upstream workflow run')
+                return
+              }
+              deploySha = run.head_sha
+              if (deploySha !== mainSha) {
+                core.setFailed(`Refusing stale main SHA ${deploySha}; current main is ${mainSha}`)
+                return
+              }
+            } else {
+              if (context.ref !== 'refs/heads/main') {
+                core.setFailed(`Dev deploys are restricted to main, got ${context.ref}`)
+                return
+              }
+              deploySha = mainSha
+              const {data} = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'ci.yml',
+                head_sha: deploySha,
+                branch: 'main',
+                event: 'push',
+                status: 'completed',
+                per_page: 100,
+              })
+              const passed = data.workflow_runs.some((run) =>
+                run.path === expectedWorkflowPath &&
+                run.head_branch === 'main' &&
+                run.head_sha === deploySha &&
+                run.event === 'push' &&
+                run.repository?.full_name === expectedRepository &&
+                run.conclusion === 'success'
+              )
+              if (!passed) {
+                core.setFailed(`No successful ci.yml push run exists for ${deploySha}`)
+                return
+              }
+            }
+
+            core.setOutput('deploy_sha', deploySha)
+
   queue:
     name: Queue dev-node build
-    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: authorize
+    if: >-
+      ${{
+        needs.authorize.result == 'success' &&
+        needs.authorize.outputs.deploy_sha != ''
+      }}
     environment: dev-deploy
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -44,7 +136,13 @@ jobs:
       - name: Queue build on dev node
         env:
           DEV_DEPLOY_HOST: ${{ secrets.DEV_DEPLOY_HOST }}
+          DEPLOY_SHA: ${{ needs.authorize.outputs.deploy_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if [[ ! "${DEPLOY_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Authorized deploy SHA is invalid"
+            exit 1
+          fi
           if [ -z "${DEV_DEPLOY_HOST}" ]; then
             echo "::error::DEV_DEPLOY_HOST is not configured"
             exit 1
@@ -53,6 +151,17 @@ jobs:
           while IFS= read -r address; do
             [ -n "${address}" ] && echo "::add-mask::${address}"
           done < <(getent ahosts "${DEV_DEPLOY_HOST}" 2>/dev/null | awk '{print $1}' | sort -u)
+          current_main_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" --jq '.object.sha'
+          )"
+          if [[ ! "${current_main_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Current main SHA is invalid"
+            exit 1
+          fi
+          if [ "${DEPLOY_SHA}" != "${current_main_sha}" ]; then
+            echo "::error::Refusing stale main SHA"
+            exit 1
+          fi
           if ! ssh -i ~/.ssh/dev-deploy \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
@@ -61,7 +170,7 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile=~/.ssh/known_hosts \
             "ubuntu@${DEV_DEPLOY_HOST}" \
-            "${GITHUB_SHA} main --detach" >/dev/null 2>&1; then
+            "${DEPLOY_SHA} main --detach" >/dev/null 2>&1; then
             echo "::error::Failed to queue dev deploy"
             exit 1
           fi

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from api import utils
@@ -47,6 +49,18 @@ class _FakePackage:
 
     def __init__(self, query):
         self.query = query
+
+
+def test_product_ndc_from_selected_row_accepts_database_row_shapes():
+    assert utils._product_ndc_from_selected_row(None) is None
+    assert (
+        utils._product_ndc_from_selected_row(
+            SimpleNamespace(product_ndc="11111-1111")
+        )
+        == "11111-1111"
+    )
+    assert utils._product_ndc_from_selected_row({"product_ndc": "22222-2222"}) == "22222-2222"
+    assert utils._product_ndc_from_selected_row(("33333-3333",)) == "33333-3333"
 
 
 @pytest.mark.asyncio

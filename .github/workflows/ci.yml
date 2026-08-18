@@ -23,10 +23,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Commit message policy
-        run: python3 scripts/check_commit_messages.py --event "$GITHUB_EVENT_PATH"
-      - name: Check public repository hygiene
-        run: python scripts/ci/public_hygiene.py
+      - name: Run public hygiene
+        run: scripts/ci/prepush hygiene
 
   python-quality:
     name: python quality
@@ -42,18 +40,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
-      - name: Check import ordering
-        run: isort --check-only api db process tests main.py
-      - name: Run flake8
-        run: flake8 api db process tests main.py
-      - name: Run pylint errors
-        run: pylint --errors-only --disable=no-member api db process tests main.py
-      - name: Compile service modules
-        run: python -m compileall api process db scripts main.py
-      - name: Readability budget
-        run: python scripts/readability_budget.py
-      - name: Guard request-time external calls
-        run: python scripts/ci/request_time_external_call_guard.py
+      - name: Run Python quality
+        run: scripts/ci/prepush quality
 
   test:
     name: full unit test suite
@@ -73,31 +61,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
       - name: Run tests
-        run: |
-          python -m coverage run --branch --source=. -m pytest -q
-      - name: Write coverage report
-        if: always()
-        run: |
-          if [ ! -f .coverage ]; then
-            exit 0
-          fi
-          python -m coverage json -o test-coverage-python.json
-      - name: Write coverage forecast provenance
+        run: scripts/ci/prepush test
+      - name: Test coverage forecast
         if: always()
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          if [ ! -f test-coverage-python.json ]; then
-            exit 0
-          fi
-          if [ -z "$BASE_SHA" ]; then
-            echo "coverage provenance requires a target base SHA" >&2
-            exit 2
-          fi
-          python scripts/coverage_forecast.py write-provenance \
-            --base "$BASE_SHA" \
-            --report test-coverage-python.json \
-            --output coverage-provenance.json
+        run: scripts/ci/prepush coverage
       - name: Upload coverage evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -108,24 +77,6 @@ jobs:
             coverage-provenance.json
           if-no-files-found: warn
           retention-days: 1
-      - name: Test coverage forecast
-        if: always()
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          python scripts/coverage_ratchet.py --self-test
-          if [ ! -f test-coverage-python.json ]; then
-            exit 0
-          fi
-          if [ -z "$BASE_SHA" ]; then
-            echo "coverage forecast requires a target base SHA" >&2
-            exit 2
-          fi
-          python scripts/coverage_forecast.py forecast \
-            --base "$BASE_SHA" \
-            --report test-coverage-python.json \
-            --provenance coverage-provenance.json \
-            --output "$RUNNER_TEMP/coverage-forecast.json"
       - name: Upload coverage forecast
         if: always()
         uses: actions/upload-artifact@v7
@@ -145,12 +96,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - name: Python dependency audit
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pip-audit
-          pip-audit -r requirements.txt
-          pip-audit -r requirements-dev.txt
+          python -m pip install pip-audit==2.10.1
+      - name: Run dependency audits
+        run: scripts/ci/prepush security
       - name: Semgrep
         uses: semgrep/semgrep-action@v1
         with:
@@ -193,14 +144,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
-      - name: Run Alembic migrations
-        run: alembic upgrade head
-      - name: Run importer database tests
-        run: >
-          python -m pytest -q
-          tests/process/test_import_table_switching.py
-          tests/process/test_ndc_rxnorm_mapping.py
-          tests/process/test_drug_indications.py
+      - name: Run PostgreSQL checks
+        run: scripts/ci/prepush postgres
 
   redis-worker-smoke:
     name: redis worker queue smoke
@@ -228,20 +173,5 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
-      - name: Verify Redis queue depth path
-        run: |
-          python - <<'PY'
-          import asyncio
-          from redis.asyncio import Redis
-
-          async def main():
-              redis = Redis(host="127.0.0.1", port=6379, decode_responses=True)
-              await redis.rpush("arq:ci-smoke", "healthporta-ci")
-              assert await redis.llen("arq:ci-smoke") == 1
-              await redis.delete("arq:ci-smoke")
-              await redis.aclose()
-
-          asyncio.run(main())
-          PY
-      - name: Run worker control tests
-        run: python -m pytest -q tests/test_control_workers.py tests/test_import_status_events.py
+      - name: Run Redis checks
+        run: scripts/ci/prepush redis
