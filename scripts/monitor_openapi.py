@@ -93,23 +93,23 @@ def operation_cases(spec: dict[str, Any]) -> list[ProbeCase]:
                 if not isinstance(reason, str) or not reason:
                     raise ValueError(f"{method.upper()} {path} exclusion needs a reason")
                 cases.append(ProbeCase(operation_id, None, (), None, reason))
-            elif mode == "bounded":
-                if method != "get":
-                    raise ValueError(f"{method.upper()} {path}: only GET operations may be monitored live")
-                max_latency_ms = policy.get("max_latency_ms")
-                if isinstance(max_latency_ms, bool) or not isinstance(max_latency_ms, int) or max_latency_ms <= 0:
-                    raise ValueError(f"GET {path} needs a positive x-monitor.max_latency_ms")
-                cases.append(
-                    build_case(
-                        spec,
-                        path,
-                        operation,
-                        [*shared_parameters, *(operation.get("parameters") or [])],
-                        max_latency_ms,
-                    )
-                )
-            else:
+                continue
+            if mode != "bounded":
                 raise ValueError(f"{method.upper()} {path} needs an explicit monitoring policy")
+            if method != "get":
+                raise ValueError(f"{method.upper()} {path}: only GET operations may be monitored live")
+            max_latency_ms = policy.get("max_latency_ms")
+            if isinstance(max_latency_ms, bool) or not isinstance(max_latency_ms, int) or max_latency_ms <= 0:
+                raise ValueError(f"GET {path} needs a positive x-monitor.max_latency_ms")
+            cases.append(
+                build_case(
+                    spec,
+                    path,
+                    operation,
+                    [*shared_parameters, *(operation.get("parameters") or [])],
+                    max_latency_ms,
+                )
+            )
     if not cases:
         raise ValueError("OpenAPI contract has no monitoring cases")
     return cases
@@ -192,6 +192,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Return redirects to the probe instead of issuing a second request."""
 
     def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        """Disable redirect requests."""
         return None
 
 

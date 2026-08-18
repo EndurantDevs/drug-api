@@ -188,7 +188,7 @@ def test_monitor_bounds_generated_list_parameters() -> None:
 
 
 def test_execute_case_never_sends_bearer_or_follows_redirects(monkeypatch) -> None:
-    captured = {}
+    captured_request_by_key = {}
 
     class Response:
         status = 200
@@ -205,25 +205,25 @@ def test_execute_case_never_sends_bearer_or_follows_redirects(monkeypatch) -> No
 
     class Opener:
         def open(self, request, timeout):
-            captured["request"] = request
-            captured["timeout"] = timeout
+            captured_request_by_key["request"] = request
+            captured_request_by_key["timeout"] = timeout
             return Response()
 
     def fake_build_opener(handler):
-        captured["handler"] = handler
+        captured_request_by_key["handler"] = handler
         return Opener()
 
     monkeypatch.setattr(monitor_openapi.urllib.request, "build_opener", fake_build_opener)
 
-    result = monitor_openapi.execute_case(
+    probe_result = monitor_openapi.execute_case(
         monitor_openapi.ProbeCase("healthy", "/healthy", (200,), 2000),
         base_url="http://monitor.invalid",
         timeout=1,
     )
 
-    assert result.ok is True
-    assert isinstance(captured["handler"], monitor_openapi.NoRedirect)
-    assert captured["request"].get_header("Authorization") is None
+    assert probe_result.ok is True
+    assert isinstance(captured_request_by_key["handler"], monitor_openapi.NoRedirect)
+    assert captured_request_by_key["request"].get_header("Authorization") is None
 
 
 def test_execute_case_rejects_non_json_success(monkeypatch) -> None:
@@ -337,7 +337,7 @@ def test_kuma_push_rejects_template_query() -> None:
 
 
 def test_kuma_push_includes_first_failure_and_truncation_without_redirects(monkeypatch) -> None:
-    captured = {}
+    captured_push_by_key = {}
 
     class Response:
         status = 200
@@ -349,8 +349,8 @@ def test_kuma_push_includes_first_failure_and_truncation_without_redirects(monke
             return False
 
     def open_push(request, timeout):
-        captured["request"] = request
-        captured["timeout"] = timeout
+        captured_push_by_key["request"] = request
+        captured_push_by_key["timeout"] = timeout
         return Response()
 
     monkeypatch.setattr(monitor_openapi, "open_no_redirect", open_push)
@@ -375,7 +375,9 @@ def test_kuma_push_includes_first_failure_and_truncation_without_redirects(monke
         },
     )
 
-    message = urllib.parse.parse_qs(urllib.parse.urlsplit(captured["request"].full_url).query)["msg"][0]
+    message = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(captured_push_by_key["request"].full_url).query
+    )["msg"][0]
     assert "first_failure=slow" in message
     assert "failure_truncated=2" in message
     assert "status=200 error=latency budget exceeded" in message
@@ -394,7 +396,7 @@ def test_kuma_push_includes_first_failure_and_truncation_without_redirects(monke
 def test_kuma_push_distinguishes_sanitized_failure_status_and_error(
     monkeypatch, status, error
 ) -> None:
-    captured = {}
+    captured_push_by_key = {}
 
     class Response:
         status = 200
@@ -406,7 +408,7 @@ def test_kuma_push_distinguishes_sanitized_failure_status_and_error(
             return False
 
     def open_push(request, _timeout):
-        captured["request"] = request
+        captured_push_by_key["request"] = request
         return Response()
 
     monkeypatch.setattr(monitor_openapi, "open_no_redirect", open_push)
@@ -433,7 +435,7 @@ def test_kuma_push_distinguishes_sanitized_failure_status_and_error(
     )
 
     message = urllib.parse.parse_qs(
-        urllib.parse.urlsplit(captured["request"].full_url).query
+        urllib.parse.urlsplit(captured_push_by_key["request"].full_url).query
     )["msg"][0]
     expected_status = status if status is not None else "-"
     assert f"status={expected_status} error={error}" in message
