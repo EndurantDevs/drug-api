@@ -6,6 +6,17 @@ import pytest
 
 from scripts import monitor_openapi
 
+FAILURE_REASON_CASES = (
+    ("HTTP 500", 500, "HTTP500"),
+    ("TimeoutError", 200, "TIMEOUT"),
+    ("URLError", 200, "NETWORK"),
+    ("invalid_content_type", 200, "CONTENT"),
+    ("response_too_large", 200, "OVERSIZE"),
+    ("invalid_json", 200, "BADJSON"),
+    ("latency budget exceeded", 200, "LAT"),
+    ("private-marker", 200, "ERROR"),
+)
+
 
 def test_monitor_cases_cover_every_openapi_operation() -> None:
     spec = monitor_openapi.load_spec(monitor_openapi.DEFAULT_OPENAPI_PATH)
@@ -22,6 +33,20 @@ def test_monitor_cases_cover_every_openapi_operation() -> None:
     assert sum(case.path is None for case in cases) == 12
     assert all("{" not in case.path for case in cases if case.path is not None)
     assert next(case for case in cases if case.operation_id == "listProductsAll").path is None
+
+
+def test_monitor_codes_cover_exact_active_inventory() -> None:
+    spec = monitor_openapi.load_spec(monitor_openapi.DEFAULT_OPENAPI_PATH)
+    active_operation_ids = [
+        case.operation_id
+        for case in monitor_openapi.operation_cases(spec)
+        if case.path is not None
+    ]
+
+    assert list(monitor_openapi.MONITOR_OPERATION_CODES) == active_operation_ids
+    assert list(monitor_openapi.MONITOR_OPERATION_CODES.values()) == [
+        f"DA{index:03d}" for index in range(1, len(active_operation_ids) + 1)
+    ]
 
 
 def test_monitor_cases_require_explicit_bounded_or_excluded_policy() -> None:
@@ -118,7 +143,7 @@ def test_run_cases_fails_an_individual_latency_budget(monkeypatch) -> None:
     ]
 
 
-def test_run_cases_reports_first_failure_and_truncation(monkeypatch) -> None:
+def test_run_cases_retains_every_failure(monkeypatch) -> None:
     cases = [monitor_openapi.ProbeCase(f"failed-{index}", "/failed", (200,), 100) for index in range(21)]
     monkeypatch.setattr(
         monitor_openapi,
@@ -134,9 +159,9 @@ def test_run_cases_reports_first_failure_and_truncation(monkeypatch) -> None:
     )
 
     assert summary["failure_count"] == 21
-    assert summary["first_failure_operation_id"] == "failed-0"
-    assert summary["failure_truncation_count"] == 1
-    assert len(summary["failures"]) == 20
+    assert [failure["operation_id"] for failure in summary["failures"]] == [
+        f"failed-{index}" for index in range(21)
+    ]
 
 
 def test_execute_case_rejects_documented_non_2xx_status(monkeypatch) -> None:
@@ -336,106 +361,95 @@ def test_kuma_push_rejects_template_query() -> None:
         )
 
 
-def test_kuma_push_includes_first_failure_and_truncation_without_redirects(monkeypatch) -> None:
+class _PushResponse:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def _capture_push_url(monkeypatch, summary) -> str:
     captured_push_by_key = {}
-
-    class Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-    def open_push(request, timeout):
-        captured_push_by_key["request"] = request
-        captured_push_by_key["timeout"] = timeout
-        return Response()
-
-    monkeypatch.setattr(monitor_openapi, "open_no_redirect", open_push)
-    monitor_openapi.push_summary(
-        "https://kuma.invalid/api/push/token",
-        {
-            "operation_count": 25,
-            "failure_count": 22,
-            "p95_ms": 50,
-            "ok": False,
-            "first_failure_operation_id": "slow",
-            "failure_truncation_count": 2,
-            "failures": [
-                {
-                    "operation_id": "slow",
-                    "status": 200,
-                    "elapsed_ms": 51,
-                    "error": "latency budget exceeded",
-                    "max_latency_ms": 50,
-                }
-            ],
-        },
-    )
-
-    message = urllib.parse.parse_qs(
-        urllib.parse.urlsplit(captured_push_by_key["request"].full_url).query
-    )["msg"][0]
-    assert "first_failure=slow" in message
-    assert "failure_truncated=2" in message
-    assert "status=200 error=latency budget exceeded" in message
-    assert "elapsed_ms=51 budget_ms=50" in message
-
-
-@pytest.mark.parametrize(
-    ("status", "error"),
-    [
-        (500, "HTTP 500"),
-        (None, "TimeoutError"),
-        (200, "invalid_json"),
-        (200, "latency budget exceeded"),
-    ],
-)
-def test_kuma_push_distinguishes_sanitized_failure_status_and_error(
-    monkeypatch, status, error
-) -> None:
-    captured_push_by_key = {}
-
-    class Response:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
 
     def open_push(request, _timeout):
         captured_push_by_key["request"] = request
-        return Response()
+        return _PushResponse()
 
     monkeypatch.setattr(monitor_openapi, "open_no_redirect", open_push)
-    monitor_openapi.push_summary(
-        "https://kuma.invalid/api/push/token",
+    monitor_openapi.push_summary("https://kuma.invalid/api/push/token", summary)
+    return captured_push_by_key["request"].full_url
+
+
+def _probe_failure(operation_id: str, index: int) -> dict:
+    error, status, _reason = FAILURE_REASON_CASES[index % len(FAILURE_REASON_CASES)]
+    return {
+        "operation_id": operation_id,
+        "status": status,
+        "elapsed_ms": 2001,
+        "ok": False,
+        "error": error,
+        "max_latency_ms": 2000,
+        "path": "/private-marker/live-id",
+        "url": "https://private-marker.invalid/?key=private-marker",
+        "body": "private-marker",
+        "headers": "private-marker",
+    }
+
+
+def test_kuma_push_lists_every_sanitized_failure_within_bounds(monkeypatch) -> None:
+    probe_cases = [
+        case
+        for case in monitor_openapi.operation_cases(
+            monitor_openapi.load_spec(monitor_openapi.DEFAULT_OPENAPI_PATH)
+        )
+        if case.path is not None
+    ]
+    failures = [
+        _probe_failure(case.operation_id, index) for index, case in enumerate(probe_cases)
+    ]
+    request_url = _capture_push_url(
+        monkeypatch,
         {
-            "operation_count": 1,
-            "failure_count": 1,
-            "p95_ms": 101,
+            "operation_count": 25,
+            "failure_count": len(failures),
+            "p95_ms": 2001,
             "ok": False,
-            "first_failure_operation_id": "probe",
-            "failure_truncation_count": 0,
-            "failures": [
-                {
-                    "operation_id": "probe",
-                    "status": status,
-                    "elapsed_ms": 101,
-                    "ok": False,
-                    "error": error,
-                    "max_latency_ms": 100,
-                }
-            ],
+            "failures": failures,
         },
     )
 
-    message = urllib.parse.parse_qs(
-        urllib.parse.urlsplit(captured_push_by_key["request"].full_url).query
-    )["msg"][0]
-    expected_status = status if status is not None else "-"
-    assert f"status={expected_status} error={error}" in message
+    message = urllib.parse.parse_qs(urllib.parse.urlsplit(request_url).query)["msg"][0]
+    diagnostic_points = message.split(" points=", 1)[1].split(",")
+    expected_points = [
+        f"DA{index:03d}:{FAILURE_REASON_CASES[(index - 1) % len(FAILURE_REASON_CASES)][2]}:2001/2000"
+        for index in range(1, len(probe_cases) + 1)
+    ]
+
+    assert diagnostic_points == expected_points
+    assert "private-marker" not in message
+    assert "live-id" not in message
+    assert len(message.encode("ascii")) <= 3000
+    assert len(request_url.encode("ascii")) <= 8192
+
+
+def test_kuma_push_rejects_oversized_encoded_request(monkeypatch) -> None:
+    monkeypatch.setattr(
+        monitor_openapi,
+        "open_no_redirect",
+        lambda *_args, **_kwargs: pytest.fail("oversized request was sent"),
+    )
+
+    with pytest.raises(RuntimeError, match="^Kuma push failed$"):
+        monitor_openapi.push_summary(
+            "https://kuma.invalid/api/push/" + "x" * 8192,
+            {
+                "operation_count": 25,
+                "failure_count": 0,
+                "p95_ms": 1,
+                "ok": True,
+                "failures": [],
+            },
+        )

@@ -24,8 +24,24 @@ HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put", "tra
 MAX_PAGE = 0
 MAX_RESULTS_PER_PAGE = 5
 MAX_LIMIT = 5
-MAX_REPORTED_FAILURES = 20
 MAX_RESPONSE_BYTES = 65_536
+MAX_KUMA_MESSAGE_BYTES = 3_000
+MAX_KUMA_REQUEST_BYTES = 8_192
+MONITOR_OPERATION_CODES = {
+    "getDrugStatus": "DA001",
+    "getLabelByPackageNdc": "DA002",
+    "getLabelByProductNdc": "DA003",
+    "listProductsAllByPageAndSize": "DA004",
+    "listProductsByLetter": "DA005",
+    "listProductsByLetterAndPage": "DA006",
+    "listProductsByLetterPageAndSize": "DA007",
+    "getPackageWithProductByPackageNdc": "DA008",
+    "getProductByNdc": "DA009",
+    "getConditionsByProductNdc": "DA010",
+    "getConditionsByRxNorm": "DA011",
+    "getHealthcheck": "DA012",
+    "getLiveness": "DA013",
+}
 
 
 @dataclass(frozen=True)
@@ -315,7 +331,7 @@ def run_cases(
         if probe_result.ok:
             failure["error"] = "latency budget exceeded"
         all_failures.append(failure)
-    failures = all_failures[:MAX_REPORTED_FAILURES]
+    failures = all_failures
     return {
         "ok": not all_failures,
         "operation_count": len(cases),
@@ -329,6 +345,37 @@ def run_cases(
     }
 
 
+def _failure_reason(failure: dict[str, Any]) -> str:
+    """Return one fixed reason without exposing probe details."""
+    status = failure.get("status")
+    error = failure.get("error")
+    if isinstance(status, int) and not isinstance(status, bool) and not 200 <= status < 300:
+        return f"HTTP{status}" if 100 <= status <= 599 else "ERROR"
+    if isinstance(error, str) and error.startswith("HTTP ") and error[5:].isdigit():
+        code = int(error[5:])
+        return f"HTTP{code}" if 100 <= code <= 599 else "ERROR"
+    return {
+        "TimeoutError": "TIMEOUT",
+        "URLError": "NETWORK",
+        "ConnectionError": "NETWORK",
+        "ConnectionRefusedError": "NETWORK",
+        "ConnectionResetError": "NETWORK",
+        "OSError": "NETWORK",
+        "gaierror": "NETWORK",
+        "invalid_content_type": "CONTENT",
+        "response_too_large": "OVERSIZE",
+        "invalid_json": "BADJSON",
+        "latency budget exceeded": "LAT",
+    }.get(error, "ERROR")
+
+
+def _summary_int(value: Any) -> int:
+    """Accept only safe numeric fields for the external status message."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError("Kuma push failed")
+    return value
+
+
 def push_summary(push_url: str, summary: dict[str, Any]) -> None:
     """Publish the aggregate result to an Uptime Kuma Push monitor."""
     parsed_url = urllib.parse.urlsplit(push_url)
@@ -340,20 +387,24 @@ def push_summary(push_url: str, summary: dict[str, Any]) -> None:
     ):
         raise ValueError("Kuma push URL must be a bare HTTP(S) URL")
     message = (
-        f"operations={summary['operation_count']} failures={summary['failure_count']} "
-        f"p95_ms={summary['p95_ms']} first_failure={summary['first_failure_operation_id'] or '-'} "
-        f"failure_truncated={summary['failure_truncation_count']}"
+        f"operations={_summary_int(summary['operation_count'])} "
+        f"failures={_summary_int(summary['failure_count'])} "
+        f"p95_ms={_summary_int(summary['p95_ms'])}"
     )
-    if summary.get("failures"):
-        first_failure = summary["failures"][0]
-        status = first_failure.get("status")
-        error = first_failure.get("error") or "-"
-        message += (
-            f" status={status if status is not None else '-'}"
-            f" error={error}"
-            f" elapsed_ms={first_failure['elapsed_ms']}"
-            f" budget_ms={first_failure['max_latency_ms']}"
+    points = []
+    for failure in summary.get("failures", []):
+        code = MONITOR_OPERATION_CODES.get(failure.get("operation_id"))
+        if code is None:
+            raise RuntimeError("Kuma push failed")
+        points.append(
+            f"{code}:{_failure_reason(failure)}:"
+            f"{_summary_int(failure.get('elapsed_ms'))}/"
+            f"{_summary_int(failure.get('max_latency_ms'))}"
         )
+    if points:
+        message += " points=" + ",".join(points)
+    if len(message.encode("ascii")) > MAX_KUMA_MESSAGE_BYTES:
+        raise RuntimeError("Kuma push failed")
     separator = "&" if "?" in push_url else "?"
     url = push_url + separator + urllib.parse.urlencode(
         {
@@ -362,6 +413,12 @@ def push_summary(push_url: str, summary: dict[str, Any]) -> None:
             "ping": summary["p95_ms"],
         }
     )
+    try:
+        request_size = len(url.encode("ascii"))
+    except UnicodeEncodeError:
+        raise RuntimeError("Kuma push failed") from None
+    if request_size > MAX_KUMA_REQUEST_BYTES:
+        raise RuntimeError("Kuma push failed")
     try:
         with open_no_redirect(urllib.request.Request(url, method="GET"), 10) as response:
             if response.status >= 300:
