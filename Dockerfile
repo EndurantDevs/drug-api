@@ -73,8 +73,7 @@ COPY api/ /opt/api/
 COPY db/ /opt/db/
 COPY alembic/ /opt/alembic/
 COPY process/ /opt/process/
-COPY logging.yaml main.py alembic.ini openapi.yaml /opt/
-COPY scripts/monitor_openapi.py /opt/scripts/monitor_openapi.py
+COPY logging.yaml main.py alembic.ini /opt/
 
 USER nobody:nogroup
 

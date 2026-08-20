@@ -20,7 +20,7 @@ def test_ci_uses_one_exact_prepush_gate() -> None:
     assert workflow["env"]["PYTHON_VERSION"] == "3.13.15"
 
 
-def test_prepush_keeps_monitor_provenance_and_coverage_headroom() -> None:
+def test_prepush_keeps_provenance_and_coverage_headroom() -> None:
     prepush = (ROOT / "scripts/ci/prepush").read_text(encoding="utf-8")
 
     assert "HLTHPRT_SOURCE_COMMIT" in prepush
@@ -31,7 +31,6 @@ def test_prepush_keeps_monitor_provenance_and_coverage_headroom() -> None:
     assert "postgres:18@sha256:" in prepush
     assert "redis:7@sha256:" in prepush
     assert "import main, sanic" in prepush
-    assert '--entrypoint /opt/venv/bin/python "$image_revision" /opt/scripts/monitor_openapi.py --check' in prepush
     assert "returntocorp/semgrep@sha256:" in prepush
     assert "--no-git-ignore" in prepush
     assert 'Redis.from_url(os.environ["HLTHPRT_REDIS_ADDRESS"]' in prepush
