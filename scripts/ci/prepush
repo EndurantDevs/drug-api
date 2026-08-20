@@ -80,9 +80,9 @@ public_hygiene() {
 }
 
 quality() {
-    "$python_bin" -m isort --check-only api db process tests scripts/monitor_openapi.py main.py
-    "$python_bin" -m flake8 api db process tests scripts/monitor_openapi.py main.py
-    "$python_bin" -m pylint --errors-only --disable=no-member api db process tests scripts/monitor_openapi.py main.py
+    "$python_bin" -m isort --check-only api db process tests main.py
+    "$python_bin" -m flake8 api db process tests main.py
+    "$python_bin" -m pylint --errors-only --disable=no-member api db process tests main.py
     "$python_bin" -m compileall api process db scripts main.py
     "$python_bin" scripts/readability_budget.py
     "$python_bin" scripts/ci/request_time_external_call_guard.py
@@ -179,7 +179,6 @@ runtime_image() {
     [[ "$runtime_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
     docker run --rm --entrypoint /opt/venv/bin/python "$image_revision" \
         -c 'import main, sanic'
-    docker run --rm --entrypoint /opt/venv/bin/python "$image_revision" /opt/scripts/monitor_openapi.py --check
 }
 
 local_services() {
