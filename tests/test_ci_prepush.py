@@ -1,14 +1,23 @@
 """Contracts for the repository-specific CI pre-push entry point."""
 
+import re
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW_ROOT = ROOT / ".github/workflows"
+ARC_RUNNER = (
+    "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && "
+    "github.ref == 'refs/heads/main' && vars.DRUG_API_CI_RUNNER || 'ubuntu-latest' }}"
+)
+PINNED_ACTION = re.compile(r"^[^./\s][^@\s]*@[0-9a-f]{40}$")
 
 
 def test_ci_uses_one_exact_prepush_gate() -> None:
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    workflow_text = (WORKFLOW_ROOT / "ci.yml").read_text(encoding="utf-8")
+    workflow = yaml.safe_load(workflow_text)
+    triggers = yaml.load(workflow_text, Loader=yaml.BaseLoader)["on"]
     runs = [
         step["run"]
         for job in workflow["jobs"].values()
@@ -18,6 +27,21 @@ def test_ci_uses_one_exact_prepush_gate() -> None:
 
     assert runs == ["scripts/ci/prepush all"]
     assert workflow["env"]["PYTHON_VERSION"] == "3.13.15"
+    assert set(triggers) == {"pull_request", "push", "workflow_dispatch"}
+    assert workflow["jobs"]["prepush"]["runs-on"] == ARC_RUNNER
+    assert workflow["permissions"] == {"contents": "read"}
+
+
+def test_ci_actions_are_immutable_and_other_workflows_stay_hosted() -> None:
+    for path in sorted(WORKFLOW_ROOT.glob("*.yml")):
+        workflow = path.read_text(encoding="utf-8")
+        actions = re.findall(r"uses:\s+([^\s#]+)", workflow)
+        assert all(PINNED_ACTION.fullmatch(action) for action in actions), path.name
+        assert workflow.count("persist-credentials: false") >= workflow.count(
+            "uses: actions/checkout@"
+        )
+        if path.name != "ci.yml":
+            assert "DRUG_API_CI_RUNNER" not in workflow
 
 
 def test_prepush_keeps_provenance_and_coverage_headroom() -> None:
