@@ -17,7 +17,7 @@ PINNED_ACTION = re.compile(r"^[^./\s][^@\s]*@[0-9a-f]{40}$")
 def test_ci_uses_one_exact_prepush_gate() -> None:
     workflow_text = (WORKFLOW_ROOT / "ci.yml").read_text(encoding="utf-8")
     workflow = yaml.safe_load(workflow_text)
-    triggers = yaml.load(workflow_text, Loader=yaml.BaseLoader)["on"]
+    triggers = workflow.get("on", workflow.get(True))
     runs = [
         step["run"]
         for job in workflow["jobs"].values()
@@ -33,15 +33,19 @@ def test_ci_uses_one_exact_prepush_gate() -> None:
 
 
 def test_ci_actions_are_immutable_and_other_workflows_stay_hosted() -> None:
-    for path in sorted(WORKFLOW_ROOT.glob("*.yml")):
-        workflow = path.read_text(encoding="utf-8")
-        actions = re.findall(r"uses:\s+([^\s#]+)", workflow)
-        assert all(PINNED_ACTION.fullmatch(action) for action in actions), path.name
-        assert workflow.count("persist-credentials: false") >= workflow.count(
-            "uses: actions/checkout@"
-        )
-        if path.name != "ci.yml":
-            assert "DRUG_API_CI_RUNNER" not in workflow
+    paths = sorted((*WORKFLOW_ROOT.glob("*.yml"), *WORKFLOW_ROOT.glob("*.yaml")))
+    for path in paths:
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job in workflow["jobs"].values():
+            if path.name != "ci.yml":
+                assert job["runs-on"] == "ubuntu-latest", path.name
+            for step in job["steps"]:
+                action = step.get("uses")
+                if action is None:
+                    continue
+                assert PINNED_ACTION.fullmatch(action), path.name
+                if action.startswith("actions/checkout@"):
+                    assert step.get("with", {}).get("persist-credentials") is False
 
 
 def test_prepush_keeps_provenance_and_coverage_headroom() -> None:
