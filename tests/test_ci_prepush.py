@@ -28,6 +28,7 @@ def test_ci_uses_one_exact_prepush_gate() -> None:
     assert runs == ["scripts/ci/prepush all"]
     assert workflow["env"]["PYTHON_VERSION"] == "3.13.15"
     assert set(triggers) == {"pull_request", "push", "workflow_dispatch"}
+    assert triggers["push"]["branches"] == ["main"]
     assert workflow["jobs"]["prepush"]["runs-on"] == ARC_RUNNER
     assert workflow["permissions"] == {"contents": "read"}
 
