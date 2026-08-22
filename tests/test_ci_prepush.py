@@ -109,6 +109,10 @@ def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
     ("context_overrides_map", "is_accepted"),
     [
         ({}, True),
+        ({"REPOSITORY": "outside/drug-api"}, False),
+        ({"REF": "refs/pull/56/head"}, False),
+        ({"PR_BASE_REPOSITORY": "outside/drug-api"}, False),
+        ({"PR_BASE_REF": "release"}, False),
         ({"PR_HEAD_REPOSITORY": "outside/drug-api", "PR_HEAD_FORK": "true"}, False),
         (
             {
