@@ -1,0 +1,94 @@
+name: Trusted self-hosted CI
+
+on:
+  workflow_call:
+    inputs:
+      base_sha:
+        description: Exact comparison base commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13.15"
+
+jobs:
+  authorize:
+    name: Authorize protected caller
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reject untrusted caller
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CALLED_WORKFLOW_REF: ${{ job.workflow_ref }}
+          PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          deny() {
+            echo "::error::Self-hosted CI caller is not authorized"
+            exit 1
+          }
+
+          expected_repository="EndurantDevs/drug-api"
+          caller_prefix="${expected_repository}/.github/workflows/ci.yml@"
+          expected_called="${expected_repository}/.github/workflows/ci-self-hosted.yml@refs/heads/main"
+
+          [[ "${REPOSITORY}" == "${expected_repository}" ]] || deny
+          [[ "${CALLER_WORKFLOW_REF}" == "${caller_prefix}"* ]] || deny
+          [[ "${CALLED_WORKFLOW_REF}" == "${expected_called}" ]] || deny
+
+          [[ "${EVENT_NAME}" == "pull_request" ]] || deny
+          [[ "${REF}" == refs/pull/*/merge ]] || deny
+          [[ "${PR_BASE_REPOSITORY}" == "${expected_repository}" ]] || deny
+          [[ "${PR_BASE_REF}" == "main" ]] || deny
+          [[ "${PR_HEAD_REPOSITORY}" == "${expected_repository}" ]] || deny
+          [[ "${PR_HEAD_FORK}" == "false" ]] || deny
+
+  prepush:
+    name: exact pre-push gate
+    needs: authorize
+    runs-on: ${{ vars.DRUG_API_CI_RUNNER }}
+    timeout-minutes: 60
+    steps:
+      - name: Require self-hosted runner
+        if: ${{ runner.environment != 'self-hosted' }}
+        run: exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Run exact shared gate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || inputs.base_sha }}
+          PREPUSH_ARTIFACT_ROOT: ${{ runner.temp }}/drug-api-prepush
+        run: scripts/ci/prepush all
+      - name: Upload exact-gate receipt and coverage evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: drug-api-prepush
+          path: |
+            ${{ runner.temp }}/drug-api-prepush/receipt.txt
+            test-coverage-python.json
+            coverage-provenance.json
+            coverage-forecast.json
+            coverage-margins.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 1
