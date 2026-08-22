@@ -69,7 +69,9 @@ install() {
 }
 
 public_hygiene() {
-    if [[ -n "${GITHUB_EVENT_PATH:-}" ]]; then
+    if [[ "${GITHUB_EVENT_NAME:-}" == 'workflow_dispatch' ]]; then
+        "$python_bin" scripts/check_commit_messages.py --range "$(base_sha)..HEAD"
+    elif [[ -n "${GITHUB_EVENT_PATH:-}" ]]; then
         "$python_bin" scripts/check_commit_messages.py --event "$GITHUB_EVENT_PATH"
     elif [[ -n "$(git rev-list "$(base_sha)..HEAD")" ]]; then
         "$python_bin" scripts/check_commit_messages.py --range "$(base_sha)..HEAD"

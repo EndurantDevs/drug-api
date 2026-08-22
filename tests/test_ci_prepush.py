@@ -57,6 +57,8 @@ def test_ci_actions_are_immutable_and_other_workflows_stay_hosted() -> None:
 def test_prepush_keeps_provenance_and_coverage_headroom() -> None:
     prepush = (ROOT / "scripts/ci/prepush").read_text(encoding="utf-8")
 
+    assert '"${GITHUB_EVENT_NAME:-}" == \'workflow_dispatch\'' in prepush
+    assert 'check_commit_messages.py --range "$(base_sha)..HEAD"' in prepush
     assert "HLTHPRT_SOURCE_COMMIT" in prepush
     assert "org.opencontainers.image.revision" in prepush
     assert "3.13.15" in prepush
