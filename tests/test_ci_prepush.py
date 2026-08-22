@@ -14,7 +14,32 @@ ARC_RUNNER = (
     "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && "
     "github.ref == 'refs/heads/main' && vars.DRUG_API_CI_RUNNER || 'ubuntu-latest' }}"
 )
-SELF_HOSTED_RUNNER = "${{ vars.DRUG_API_CI_RUNNER }}"
+PROTECTED_PULL_REQUEST_RUNNER = " ".join(
+    """${{
+      inputs.use_self_hosted == true &&
+      github.repository == 'EndurantDevs/drug-api' &&
+      github.event_name == 'pull_request' &&
+      github.ref == format('refs/pull/{0}/merge', github.event.number) &&
+      github.workflow_ref == format(
+        'EndurantDevs/drug-api/.github/workflows/trusted-pr-ci.yml@refs/pull/{0}/merge',
+        github.event.number
+      ) &&
+      github.event.pull_request.base.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.repo.fork == false &&
+      github.event.pull_request.user.type == 'User' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !endsWith(github.actor, '[bot]') &&
+      !endsWith(github.triggering_actor, '[bot]') &&
+      contains(
+        fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+        github.event.pull_request.author_association
+      ) &&
+      vars.DRUG_API_CI_RUNNER ||
+      'ubuntu-latest'
+    }}""".split()
+)
 PINNED_ACTION = re.compile(r"^[^./\s][^@\s]*@[0-9a-f]{40}$")
 
 
@@ -58,18 +83,32 @@ def test_ci_uses_one_exact_prepush_gate() -> None:
 
 def test_reusable_ci_guards_the_self_hosted_gate() -> None:
     workflow = yaml.safe_load((WORKFLOW_ROOT / "ci.yml").read_text(encoding="utf-8"))
-    authorize = workflow["jobs"]["authorize-self-hosted"]
     prepush = workflow["jobs"]["self-hosted-prepush"]
 
-    assert authorize["if"] == "${{ inputs.use_self_hosted == true }}"
-    assert authorize["runs-on"] == "ubuntu-latest"
+    assert set(workflow["jobs"]) == {"prepush", "self-hosted-prepush"}
     assert prepush["if"] == "${{ inputs.use_self_hosted == true }}"
-    assert prepush["needs"] == "authorize-self-hosted"
-    assert prepush["runs-on"] == SELF_HOSTED_RUNNER
-    assert prepush["steps"][0] == {
-        "name": "Require self-hosted runner",
-        "if": "${{ runner.environment != 'self-hosted' }}",
-        "run": "exit 1",
+    assert "needs" not in prepush
+    assert " ".join(prepush["runs-on"].split()) == PROTECTED_PULL_REQUEST_RUNNER
+    guard = prepush["steps"][0]
+    assert guard["name"] == "Authorize protected caller on runner"
+    assert guard["shell"] == "bash"
+    assert guard["env"] == {
+        "USE_SELF_HOSTED": "${{ inputs.use_self_hosted }}",
+        "REPOSITORY": "${{ github.repository }}",
+        "EVENT_NAME": "${{ github.event_name }}",
+        "REF": "${{ github.ref }}",
+        "PR_NUMBER": "${{ github.event.number }}",
+        "CALLER_WORKFLOW_REF": "${{ github.workflow_ref }}",
+        "ACTOR": "${{ github.actor }}",
+        "TRIGGERING_ACTOR": "${{ github.triggering_actor }}",
+        "PR_BASE_REPOSITORY": "${{ github.event.pull_request.base.repo.full_name }}",
+        "PR_BASE_REF": "${{ github.event.pull_request.base.ref }}",
+        "PR_HEAD_REPOSITORY": "${{ github.event.pull_request.head.repo.full_name }}",
+        "PR_HEAD_FORK": "${{ github.event.pull_request.head.repo.fork }}",
+        "PR_AUTHOR_ASSOCIATION": "${{ github.event.pull_request.author_association }}",
+        "PR_AUTHOR_LOGIN": "${{ github.event.pull_request.user.login }}",
+        "PR_AUTHOR_TYPE": "${{ github.event.pull_request.user.type }}",
+        "RUNNER_ENVIRONMENT": "${{ runner.environment }}",
     }
     assert prepush["steps"][1:] == workflow["jobs"]["prepush"]["steps"]
 
@@ -77,17 +116,16 @@ def test_reusable_ci_guards_the_self_hosted_gate() -> None:
 def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
     """Run the protected caller guard with one synthetic GitHub context."""
     workflow = yaml.safe_load((WORKFLOW_ROOT / "ci.yml").read_text(encoding="utf-8"))
-    guard_script = workflow["jobs"]["authorize-self-hosted"]["steps"][0]["run"]
+    guard_script = workflow["jobs"]["self-hosted-prepush"]["steps"][0]["run"]
     trusted_environment_map = {
+        "USE_SELF_HOSTED": "true",
         "REPOSITORY": "EndurantDevs/drug-api",
         "EVENT_NAME": "pull_request",
         "REF": "refs/pull/56/merge",
+        "PR_NUMBER": "56",
         "CALLER_WORKFLOW_REF": (
             "EndurantDevs/drug-api/.github/workflows/"
             "trusted-pr-ci.yml@refs/pull/56/merge"
-        ),
-        "CALLED_WORKFLOW_REF": (
-            "EndurantDevs/drug-api/.github/workflows/ci.yml@refs/heads/main"
         ),
         "ACTOR": "trusted-user",
         "TRIGGERING_ACTOR": "trusted-user",
@@ -98,6 +136,7 @@ def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
         "PR_AUTHOR_ASSOCIATION": "MEMBER",
         "PR_AUTHOR_LOGIN": "trusted-user",
         "PR_AUTHOR_TYPE": "User",
+        "RUNNER_ENVIRONMENT": "self-hosted",
     }
     guard_process = subprocess.run(
         ["bash", "-c", guard_script],
@@ -115,8 +154,20 @@ def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
         ({}, True),
         ({"PR_AUTHOR_ASSOCIATION": "OWNER"}, True),
         ({"PR_AUTHOR_ASSOCIATION": "COLLABORATOR"}, True),
+        ({"USE_SELF_HOSTED": "false"}, False),
         ({"REPOSITORY": "outside/drug-api"}, False),
         ({"REF": "refs/pull/56/head"}, False),
+        (
+            {
+                "PR_NUMBER": "not-numeric",
+                "REF": "refs/pull/not-numeric/merge",
+                "CALLER_WORKFLOW_REF": (
+                    "EndurantDevs/drug-api/.github/workflows/"
+                    "trusted-pr-ci.yml@refs/pull/not-numeric/merge"
+                ),
+            },
+            False,
+        ),
         ({"PR_BASE_REPOSITORY": "outside/drug-api"}, False),
         ({"PR_BASE_REF": "release"}, False),
         ({"PR_HEAD_REPOSITORY": "outside/drug-api"}, False),
@@ -127,19 +178,28 @@ def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
         ({"PR_AUTHOR_LOGIN": "dependabot[bot]"}, False),
         ({"ACTOR": "dependabot[bot]"}, False),
         ({"TRIGGERING_ACTOR": "renovate[bot]"}, False),
+        ({"RUNNER_ENVIRONMENT": "github-hosted"}, False),
         (
             {
                 "CALLER_WORKFLOW_REF": (
-                    "outside/drug-api/.github/workflows/ci.yml@refs/pull/56/merge"
+                    "outside/drug-api/.github/workflows/"
+                    "trusted-pr-ci.yml@refs/pull/56/merge"
                 )
             },
             False,
         ),
         (
             {
-                "CALLED_WORKFLOW_REF": (
-                    "EndurantDevs/drug-api/.github/workflows/ci.yml@refs/heads/feature"
+                "CALLER_WORKFLOW_REF": (
+                    "EndurantDevs/drug-api/.github/workflows/"
+                    "alternate-ci.yml@refs/pull/56/merge"
                 )
+            },
+            False,
+        ),
+        (
+            {
+                "PR_NUMBER": "57",
             },
             False,
         ),
