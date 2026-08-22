@@ -8,8 +8,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_ROOT = ROOT / ".github/workflows"
 ARC_RUNNER = (
-    "${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && "
-    "github.ref == 'refs/heads/main' && vars.DRUG_API_CI_RUNNER || 'ubuntu-latest' }}"
+    "${{ github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.fork && 'ubuntu-latest' || "
+    "vars.DRUG_API_CI_RUNNER || 'ubuntu-latest' }}"
 )
 PINNED_ACTION = re.compile(r"^[^./\s][^@\s]*@[0-9a-f]{40}$")
 
