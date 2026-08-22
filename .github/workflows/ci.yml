@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      base_sha:
+        description: Exact comparison base commit
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -34,7 +39,7 @@ jobs:
           cache-dependency-path: requirements-dev.txt
       - name: Run exact shared gate
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || inputs.base_sha }}
           PREPUSH_ARTIFACT_ROOT: ${{ runner.temp }}/drug-api-prepush
         run: scripts/ci/prepush all
       - name: Upload exact-gate receipt and coverage evidence
