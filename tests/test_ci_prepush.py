@@ -99,6 +99,7 @@ def test_reusable_ci_guards_the_self_hosted_gate() -> None:
         "REF": "${{ github.ref }}",
         "PR_NUMBER": "${{ github.event.number }}",
         "CALLER_WORKFLOW_REF": "${{ github.workflow_ref }}",
+        "CALLED_WORKFLOW_REF": "${{ job.workflow_ref }}",
         "ACTOR": "${{ github.actor }}",
         "TRIGGERING_ACTOR": "${{ github.triggering_actor }}",
         "PR_BASE_REPOSITORY": "${{ github.event.pull_request.base.repo.full_name }}",
@@ -108,12 +109,15 @@ def test_reusable_ci_guards_the_self_hosted_gate() -> None:
         "PR_AUTHOR_ASSOCIATION": "${{ github.event.pull_request.author_association }}",
         "PR_AUTHOR_LOGIN": "${{ github.event.pull_request.user.login }}",
         "PR_AUTHOR_TYPE": "${{ github.event.pull_request.user.type }}",
+        "RUNNER_LABEL": "${{ vars.DRUG_API_CI_RUNNER }}",
         "RUNNER_ENVIRONMENT": "${{ runner.environment }}",
     }
     assert prepush["steps"][1:] == workflow["jobs"]["prepush"]["steps"]
 
 
-def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
+def _run_caller_guard(
+    context_overrides_map: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
     """Run the protected caller guard with one synthetic GitHub context."""
     workflow = yaml.safe_load((WORKFLOW_ROOT / "ci.yml").read_text(encoding="utf-8"))
     guard_script = workflow["jobs"]["self-hosted-prepush"]["steps"][0]["run"]
@@ -127,6 +131,9 @@ def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
             "EndurantDevs/drug-api/.github/workflows/"
             "trusted-pr-ci.yml@refs/pull/56/merge"
         ),
+        "CALLED_WORKFLOW_REF": (
+            "EndurantDevs/drug-api/.github/workflows/ci.yml@refs/heads/main"
+        ),
         "ACTOR": "trusted-user",
         "TRIGGERING_ACTOR": "trusted-user",
         "PR_BASE_REPOSITORY": "EndurantDevs/drug-api",
@@ -136,16 +143,16 @@ def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
         "PR_AUTHOR_ASSOCIATION": "MEMBER",
         "PR_AUTHOR_LOGIN": "trusted-user",
         "PR_AUTHOR_TYPE": "User",
+        "RUNNER_LABEL": "drug-api-main-ci",
         "RUNNER_ENVIRONMENT": "self-hosted",
     }
-    guard_process = subprocess.run(
+    return subprocess.run(
         ["bash", "-c", guard_script],
         env={**os.environ, **trusted_environment_map, **context_overrides_map},
         check=False,
         capture_output=True,
         text=True,
     )
-    return guard_process.returncode
 
 
 @pytest.mark.parametrize(
@@ -203,13 +210,28 @@ def _caller_guard_exit_code(context_overrides_map: dict[str, str]) -> int:
             },
             False,
         ),
+        (
+            {
+                "CALLED_WORKFLOW_REF": (
+                    "EndurantDevs/drug-api/.github/workflows/ci.yml@refs/heads/feature"
+                )
+            },
+            False,
+        ),
         ({"EVENT_NAME": "push", "REF": "refs/heads/main"}, False),
     ],
 )
 def test_reusable_ci_caller_guard_accepts_only_trusted_contexts(
     context_overrides_map: dict[str, str], is_accepted: bool
 ) -> None:
-    assert (_caller_guard_exit_code(context_overrides_map) == 0) is is_accepted
+    assert (_run_caller_guard(context_overrides_map).returncode == 0) is is_accepted
+
+
+def test_reusable_ci_caller_guard_reports_missing_runner_label() -> None:
+    result = _run_caller_guard({"RUNNER_LABEL": ""})
+
+    assert result.returncode == 1
+    assert result.stdout == "::error::DRUG_API_CI_RUNNER is not configured\n"
 
 
 def test_ci_actions_are_immutable_and_other_workflows_stay_hosted() -> None:

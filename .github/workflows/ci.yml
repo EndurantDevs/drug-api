@@ -107,6 +107,7 @@ jobs:
           REF: ${{ github.ref }}
           PR_NUMBER: ${{ github.event.number }}
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CALLED_WORKFLOW_REF: ${{ job.workflow_ref }}
           ACTOR: ${{ github.actor }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           PR_BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
@@ -116,6 +117,7 @@ jobs:
           PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
           PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          RUNNER_LABEL: ${{ vars.DRUG_API_CI_RUNNER }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
@@ -128,12 +130,14 @@ jobs:
           [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || deny
           expected_ref="refs/pull/${PR_NUMBER}/merge"
           expected_caller="${expected_repository}/.github/workflows/trusted-pr-ci.yml@${expected_ref}"
+          expected_called="${expected_repository}/.github/workflows/ci.yml@refs/heads/main"
 
           [[ "${USE_SELF_HOSTED}" == "true" ]] || deny
           [[ "${REPOSITORY}" == "${expected_repository}" ]] || deny
           [[ "${EVENT_NAME}" == "pull_request" ]] || deny
           [[ "${REF}" == "${expected_ref}" ]] || deny
           [[ "${CALLER_WORKFLOW_REF}" == "${expected_caller}" ]] || deny
+          [[ "${CALLED_WORKFLOW_REF}" == "${expected_called}" ]] || deny
           [[ "${PR_BASE_REPOSITORY}" == "${expected_repository}" ]] || deny
           [[ "${PR_BASE_REF}" == "main" ]] || deny
           [[ "${PR_HEAD_REPOSITORY}" == "${expected_repository}" ]] || deny
@@ -142,6 +146,10 @@ jobs:
           [[ "${PR_AUTHOR_LOGIN}" != "dependabot[bot]" ]] || deny
           [[ "${ACTOR}" != *"[bot]" ]] || deny
           [[ "${TRIGGERING_ACTOR}" != *"[bot]" ]] || deny
+          if [[ -z "${RUNNER_LABEL}" ]]; then
+            echo "::error::DRUG_API_CI_RUNNER is not configured"
+            exit 1
+          fi
           [[ "${RUNNER_ENVIRONMENT}" == "self-hosted" ]] || deny
           case "${PR_AUTHOR_ASSOCIATION}" in
             OWNER|MEMBER|COLLABORATOR) ;;
