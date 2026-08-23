@@ -1,0 +1,28 @@
+name: Trusted pull request CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: EndurantDevs/drug-api/.github/workflows/ci.yml@main
+    with:
+      base_sha: ${{ github.event.pull_request.base.sha }}
+      use_self_hosted: >-
+        ${{
+          github.repository == 'EndurantDevs/drug-api' &&
+          github.event_name == 'pull_request' &&
+          github.ref == format('refs/pull/{0}/merge', github.event.number) &&
+          github.event.pull_request.base.repo.full_name == github.repository &&
+          github.event.pull_request.base.ref == 'main' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.head.repo.fork == false &&
+          github.event.pull_request.user.type == 'User' &&
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          !endsWith(github.actor, '[bot]') &&
+          !endsWith(github.triggering_actor, '[bot]')
+        }}
