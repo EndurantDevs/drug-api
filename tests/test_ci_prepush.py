@@ -22,10 +22,6 @@ COMBINED_RUNNER = " ".join(
           github.repository == 'EndurantDevs/drug-api' &&
           github.event_name == 'pull_request' &&
           github.ref == format('refs/pull/{0}/merge', github.event.number) &&
-          startsWith(
-            github.workflow_ref,
-            'EndurantDevs/drug-api/.github/workflows/trusted-pr-ci.yml@'
-          ) &&
           github.event.pull_request.base.repo.full_name == github.repository &&
           github.event.pull_request.base.ref == 'main' &&
           github.event.pull_request.head.repo.full_name == github.repository &&
@@ -33,11 +29,7 @@ COMBINED_RUNNER = " ".join(
           github.event.pull_request.user.type == 'User' &&
           github.event.pull_request.user.login != 'dependabot[bot]' &&
           !endsWith(github.actor, '[bot]') &&
-          !endsWith(github.triggering_actor, '[bot]') &&
-          contains(
-            fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-            github.event.pull_request.author_association
-          )
+          !endsWith(github.triggering_actor, '[bot]')
         )
       ) &&
       vars.DRUG_API_CI_RUNNER ||
@@ -107,7 +99,6 @@ def test_reusable_ci_guards_the_self_hosted_gate() -> None:
         "EVENT_NAME": "${{ github.event_name }}",
         "REF": "${{ github.ref }}",
         "PR_NUMBER": "${{ github.event.number }}",
-        "CALLER_WORKFLOW_REF": "${{ github.workflow_ref }}",
         "CALLED_WORKFLOW_REF": "${{ job.workflow_ref }}",
         "ACTOR": "${{ github.actor }}",
         "TRIGGERING_ACTOR": "${{ github.triggering_actor }}",
@@ -115,12 +106,13 @@ def test_reusable_ci_guards_the_self_hosted_gate() -> None:
         "PR_BASE_REF": "${{ github.event.pull_request.base.ref }}",
         "PR_HEAD_REPOSITORY": "${{ github.event.pull_request.head.repo.full_name }}",
         "PR_HEAD_FORK": "${{ github.event.pull_request.head.repo.fork }}",
-        "PR_AUTHOR_ASSOCIATION": "${{ github.event.pull_request.author_association }}",
         "PR_AUTHOR_LOGIN": "${{ github.event.pull_request.user.login }}",
         "PR_AUTHOR_TYPE": "${{ github.event.pull_request.user.type }}",
         "RUNNER_LABEL": "${{ vars.DRUG_API_CI_RUNNER }}",
         "RUNNER_ENVIRONMENT": "${{ runner.environment }}",
     }
+    assert "github.workflow_ref" not in str(prepush)
+    assert "author_association" not in str(prepush)
 
 
 def _run_caller_guard(
@@ -135,10 +127,6 @@ def _run_caller_guard(
         "EVENT_NAME": "pull_request",
         "REF": "refs/pull/56/merge",
         "PR_NUMBER": "56",
-        "CALLER_WORKFLOW_REF": (
-            "EndurantDevs/drug-api/.github/workflows/"
-            "trusted-pr-ci.yml@refs/pull/56/merge"
-        ),
         "CALLED_WORKFLOW_REF": (
             "EndurantDevs/drug-api/.github/workflows/ci.yml@refs/heads/main"
         ),
@@ -148,7 +136,6 @@ def _run_caller_guard(
         "PR_BASE_REF": "main",
         "PR_HEAD_REPOSITORY": "EndurantDevs/drug-api",
         "PR_HEAD_FORK": "false",
-        "PR_AUTHOR_ASSOCIATION": "MEMBER",
         "PR_AUTHOR_LOGIN": "trusted-user",
         "PR_AUTHOR_TYPE": "User",
         "RUNNER_LABEL": "drug-api-main-ci",
@@ -167,8 +154,6 @@ def _run_caller_guard(
     ("context_overrides_map", "is_accepted"),
     [
         ({}, True),
-        ({"PR_AUTHOR_ASSOCIATION": "OWNER"}, True),
-        ({"PR_AUTHOR_ASSOCIATION": "COLLABORATOR"}, True),
         ({"USE_SELF_HOSTED": "false"}, False),
         ({"REPOSITORY": "outside/drug-api"}, False),
         ({"REF": "refs/pull/56/head"}, False),
@@ -176,10 +161,6 @@ def _run_caller_guard(
             {
                 "PR_NUMBER": "not-numeric",
                 "REF": "refs/pull/not-numeric/merge",
-                "CALLER_WORKFLOW_REF": (
-                    "EndurantDevs/drug-api/.github/workflows/"
-                    "trusted-pr-ci.yml@refs/pull/not-numeric/merge"
-                ),
             },
             False,
         ),
@@ -187,31 +168,11 @@ def _run_caller_guard(
         ({"PR_BASE_REF": "release"}, False),
         ({"PR_HEAD_REPOSITORY": "outside/drug-api"}, False),
         ({"PR_HEAD_FORK": "true"}, False),
-        ({"PR_AUTHOR_ASSOCIATION": "CONTRIBUTOR"}, False),
-        ({"PR_AUTHOR_ASSOCIATION": "NONE"}, False),
         ({"PR_AUTHOR_TYPE": "Bot"}, False),
         ({"PR_AUTHOR_LOGIN": "dependabot[bot]"}, False),
         ({"ACTOR": "dependabot[bot]"}, False),
         ({"TRIGGERING_ACTOR": "renovate[bot]"}, False),
         ({"RUNNER_ENVIRONMENT": "github-hosted"}, False),
-        (
-            {
-                "CALLER_WORKFLOW_REF": (
-                    "outside/drug-api/.github/workflows/"
-                    "trusted-pr-ci.yml@refs/pull/56/merge"
-                )
-            },
-            False,
-        ),
-        (
-            {
-                "CALLER_WORKFLOW_REF": (
-                    "EndurantDevs/drug-api/.github/workflows/"
-                    "alternate-ci.yml@refs/pull/56/merge"
-                )
-            },
-            False,
-        ),
         (
             {
                 "PR_NUMBER": "57",

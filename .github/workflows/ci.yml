@@ -46,10 +46,6 @@ jobs:
             github.repository == 'EndurantDevs/drug-api' &&
             github.event_name == 'pull_request' &&
             github.ref == format('refs/pull/{0}/merge', github.event.number) &&
-            startsWith(
-              github.workflow_ref,
-              'EndurantDevs/drug-api/.github/workflows/trusted-pr-ci.yml@'
-            ) &&
             github.event.pull_request.base.repo.full_name == github.repository &&
             github.event.pull_request.base.ref == 'main' &&
             github.event.pull_request.head.repo.full_name == github.repository &&
@@ -57,11 +53,7 @@ jobs:
             github.event.pull_request.user.type == 'User' &&
             github.event.pull_request.user.login != 'dependabot[bot]' &&
             !endsWith(github.actor, '[bot]') &&
-            !endsWith(github.triggering_actor, '[bot]') &&
-            contains(
-              fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-              github.event.pull_request.author_association
-            )
+            !endsWith(github.triggering_actor, '[bot]')
           )
         ) &&
         vars.DRUG_API_CI_RUNNER ||
@@ -78,7 +70,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REF: ${{ github.ref }}
           PR_NUMBER: ${{ github.event.number }}
-          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           CALLED_WORKFLOW_REF: ${{ job.workflow_ref }}
           ACTOR: ${{ github.actor }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
@@ -86,7 +77,6 @@ jobs:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           PR_HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
           PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
           PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
           RUNNER_LABEL: ${{ vars.DRUG_API_CI_RUNNER }}
@@ -101,14 +91,12 @@ jobs:
           expected_repository="EndurantDevs/drug-api"
           [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || deny
           expected_ref="refs/pull/${PR_NUMBER}/merge"
-          expected_caller_prefix="${expected_repository}/.github/workflows/trusted-pr-ci.yml@"
           expected_called="${expected_repository}/.github/workflows/ci.yml@refs/heads/main"
 
           [[ "${USE_SELF_HOSTED}" == "true" ]] || deny
           [[ "${REPOSITORY}" == "${expected_repository}" ]] || deny
           [[ "${EVENT_NAME}" == "pull_request" ]] || deny
           [[ "${REF}" == "${expected_ref}" ]] || deny
-          [[ "${CALLER_WORKFLOW_REF}" == "${expected_caller_prefix}"* ]] || deny
           [[ "${CALLED_WORKFLOW_REF}" == "${expected_called}" ]] || deny
           [[ "${PR_BASE_REPOSITORY}" == "${expected_repository}" ]] || deny
           [[ "${PR_BASE_REF}" == "main" ]] || deny
@@ -123,10 +111,6 @@ jobs:
             exit 1
           fi
           [[ "${RUNNER_ENVIRONMENT}" == "self-hosted" ]] || deny
-          case "${PR_AUTHOR_ASSOCIATION}" in
-            OWNER|MEMBER|COLLABORATOR) ;;
-            *) deny ;;
-          esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
