@@ -10,6 +10,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_ROOT = ROOT / ".github/workflows"
+TRUSTED_PR_CALLER = WORKFLOW_ROOT / "trusted-pr-ci.yml"
 COMBINED_RUNNER = " ".join(
     """${{
       (
@@ -36,6 +37,21 @@ COMBINED_RUNNER = " ".join(
       'ubuntu-latest'
     }}""".split()
 )
+CALLER_USE_SELF_HOSTED = " ".join(
+    """${{
+      github.repository == 'EndurantDevs/drug-api' &&
+      github.event_name == 'pull_request' &&
+      github.ref == format('refs/pull/{0}/merge', github.event.number) &&
+      github.event.pull_request.base.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.repo.fork == false &&
+      github.event.pull_request.user.type == 'User' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      !endsWith(github.actor, '[bot]') &&
+      !endsWith(github.triggering_actor, '[bot]')
+    }}""".split()
+)
 PINNED_ACTION = re.compile(r"^[^./\s][^@\s]*@[0-9a-f]{40}$")
 
 
@@ -57,7 +73,6 @@ def test_ci_uses_one_exact_prepush_gate() -> None:
     assert gate_runs == ["scripts/ci/prepush all"]
     assert workflow["env"]["PYTHON_VERSION"] == "3.13.15"
     assert set(triggers) == {
-        "pull_request",
         "push",
         "workflow_dispatch",
         "workflow_call",
@@ -82,6 +97,27 @@ def test_ci_uses_one_exact_prepush_gate() -> None:
     }
     assert " ".join(prepush["runs-on"].split()) == COMBINED_RUNNER
     assert workflow["permissions"] == {"contents": "read"}
+
+
+def test_trusted_pr_caller_uses_only_the_protected_reusable_gate() -> None:
+    caller_text = TRUSTED_PR_CALLER.read_text(encoding="utf-8")
+    caller = yaml.safe_load(caller_text)
+    triggers = caller.get("on", caller.get(True))
+    job = caller["jobs"]["ci"]
+
+    assert triggers == {
+        "pull_request": {"types": ["opened", "synchronize", "reopened"]}
+    }
+    assert caller["permissions"] == {"contents": "read"}
+    assert set(caller["jobs"]) == {"ci"}
+    assert set(job) == {"uses", "with"}
+    assert job["uses"] == "EndurantDevs/drug-api/.github/workflows/ci.yml@main"
+    assert job["with"]["base_sha"] == "${{ github.event.pull_request.base.sha }}"
+    assert " ".join(job["with"]["use_self_hosted"].split()) == CALLER_USE_SELF_HOSTED
+    assert "secrets" not in caller_text
+    assert "vars." not in caller_text
+    assert "github.workflow_ref" not in caller_text
+    assert "author_association" not in caller_text
 
 
 def test_reusable_ci_guards_the_self_hosted_gate() -> None:
@@ -207,6 +243,8 @@ def test_ci_actions_are_immutable_and_other_workflows_stay_hosted() -> None:
     paths = sorted((*WORKFLOW_ROOT.glob("*.yml"), *WORKFLOW_ROOT.glob("*.yaml")))
     for path in paths:
         workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if path == TRUSTED_PR_CALLER:
+            continue
         for job in workflow["jobs"].values():
             if path.name != "ci.yml":
                 assert job["runs-on"] == "ubuntu-latest", path.name
