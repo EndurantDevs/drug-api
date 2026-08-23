@@ -26,7 +26,12 @@ def test_ci_forecast_requires_exact_source_and_target_provenance():
     test_job_by_name = workflow_by_name["jobs"]["prepush"]
     steps_by_name = _steps_by_name(test_job_by_name)
 
-    checkout_step = test_job_by_name["steps"][0]
+    checkout_step = next(
+        step_by_name
+        for step_by_name in test_job_by_name["steps"]
+        if step_by_name.get("uses")
+        == "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+    )
     gate_step = steps_by_name["Run exact shared gate"]
     evidence_upload_step = steps_by_name["Upload exact-gate receipt and coverage evidence"]
 
