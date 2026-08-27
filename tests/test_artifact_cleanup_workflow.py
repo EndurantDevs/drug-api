@@ -59,6 +59,7 @@ def test_pr_close_and_stale_cleanup_are_scoped() -> None:
     closed = workflow["jobs"]["delete-closed-pr-artifacts"]
     assert closed["if"] == "github.event_name == 'pull_request_target'"
     assert ".workflow_run.head_branch == $head_ref" in closed["steps"][0]["run"]
+    assert ".workflow_run.head_repository_id | tostring" in closed["steps"][0]["run"]
     assert closed["steps"][0]["env"]["PR_CREATED_AT"] == (
         "${{ github.event.pull_request.created_at }}"
     )
@@ -70,6 +71,8 @@ def test_pr_close_and_stale_cleanup_are_scoped() -> None:
     assert '.event == "pull_request"' not in closed["steps"][0]["run"]
     assert ".created_at >= $pr_created_at" in closed["steps"][0]["run"]
     assert ".created_at <= $pr_closed_at" in closed["steps"][0]["run"]
+    assert "2>/dev/null" not in closed["steps"][0]["run"]
+    assert "|| true" not in closed["steps"][0]["run"]
     assert 'artifact_rows="$(mktemp)"' in closed["steps"][0]["run"]
     assert 'trap \'rm -f "$artifact_rows"\' EXIT' in closed["steps"][0]["run"]
     assert 'done < "$artifact_rows"' in closed["steps"][0]["run"]
