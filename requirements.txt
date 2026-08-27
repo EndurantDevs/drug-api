@@ -15,7 +15,7 @@ httpcore==1.0.9
 httptools==0.8.0
 httpx==0.28.1
 humanize==4.16.0
-idna==3.18
+idna==3.19
 ijson==3.5.1
 Mako==1.4.1
 MarkupSafe==3.0.3
