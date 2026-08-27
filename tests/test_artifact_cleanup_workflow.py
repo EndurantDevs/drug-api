@@ -69,7 +69,9 @@ def test_pr_close_and_stale_cleanup_are_scoped() -> None:
         "${{ github.event.pull_request.closed_at }}"
     )
     assert '.status == "completed"' in closed["steps"][0]["run"]
-    assert ".pull_requests[]?" not in closed["steps"][0]["run"]
+    assert ".pull_requests[]" not in closed["steps"][0]["run"]
+    assert "PR_NUMBER" not in closed["steps"][0]["env"]
+    assert "PR_NUMBER" not in closed["steps"][0]["run"]
     assert '.event == "pull_request"' not in closed["steps"][0]["run"]
     assert ".created_at >= $pr_created_at" in closed["steps"][0]["run"]
     assert ".created_at <= $pr_closed_at" in closed["steps"][0]["run"]
