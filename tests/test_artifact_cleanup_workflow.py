@@ -2,7 +2,6 @@ from pathlib import Path
 
 import yaml
 
-
 WORKFLOW_PATH = Path(".github/workflows/artifact-cleanup.yml")
 CI_WORKFLOW_PATH = Path(".github/workflows/ci.yml")
 
