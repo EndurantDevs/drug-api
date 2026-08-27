@@ -16,6 +16,7 @@ permissions:
 
 concurrency:
   group: actions-artifact-cleanup
+  queue: max
   cancel-in-progress: false
 
 defaults:

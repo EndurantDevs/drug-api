@@ -21,6 +21,7 @@ def test_completed_ci_artifacts_are_deleted() -> None:
     assert workflow["permissions"] == {"actions": "write", "contents": "read"}
     assert workflow["concurrency"] == {
         "group": "actions-artifact-cleanup",
+        "queue": "max",
         "cancel-in-progress": "false",
     }
 
