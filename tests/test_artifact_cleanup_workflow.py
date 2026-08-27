@@ -20,10 +20,7 @@ def test_completed_ci_artifacts_are_deleted() -> None:
     }
     assert workflow["permissions"] == {"actions": "write", "contents": "read"}
     assert workflow["concurrency"] == {
-        "group": (
-            "actions-artifact-cleanup-"
-            "${{ github.event.workflow_run.id || github.run_id }}"
-        ),
+        "group": "actions-artifact-cleanup",
         "cancel-in-progress": "false",
     }
 
@@ -56,7 +53,11 @@ def test_completed_ci_artifacts_are_deleted() -> None:
     closed = workflow["jobs"]["delete-closed-pr-artifacts"]
     assert closed["if"] == "github.event_name == 'pull_request_target'"
     assert ".workflow_run.head_branch == $head_ref" in closed["steps"][0]["run"]
-    assert 'if [ "${status}" = "completed" ]' in closed["steps"][0]["run"]
+    assert closed["steps"][0]["env"]["PR_NUMBER"] == (
+        "${{ github.event.pull_request.number }}"
+    )
+    assert '.status == "completed"' in closed["steps"][0]["run"]
+    assert "any(.pull_requests[]?;" in closed["steps"][0]["run"]
     assert 'artifact_rows="$(mktemp)"' in closed["steps"][0]["run"]
     assert 'trap \'rm -f "$artifact_rows"\' EXIT' in closed["steps"][0]["run"]
     assert 'done < "$artifact_rows"' in closed["steps"][0]["run"]
