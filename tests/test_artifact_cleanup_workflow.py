@@ -42,6 +42,8 @@ def test_completed_ci_artifacts_are_deleted() -> None:
     assert 'done < "$artifact_ids"' in delete["run"]
     assert "/actions/artifacts/${artifact_id}" in delete["run"]
 
+
+def test_ci_artifacts_expire_after_one_day() -> None:
     ci = yaml.load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     upload = next(
         step
@@ -50,6 +52,9 @@ def test_completed_ci_artifacts_are_deleted() -> None:
     )
     assert upload["with"]["retention-days"] == "1"
 
+
+def test_pr_close_and_stale_cleanup_are_scoped() -> None:
+    workflow = yaml.load(WORKFLOW_PATH.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
     closed = workflow["jobs"]["delete-closed-pr-artifacts"]
     assert closed["if"] == "github.event_name == 'pull_request_target'"
     assert ".workflow_run.head_branch == $head_ref" in closed["steps"][0]["run"]
