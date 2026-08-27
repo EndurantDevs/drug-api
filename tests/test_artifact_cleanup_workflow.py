@@ -59,7 +59,9 @@ def test_pr_close_and_stale_cleanup_are_scoped() -> None:
     closed = workflow["jobs"]["delete-closed-pr-artifacts"]
     assert closed["if"] == "github.event_name == 'pull_request_target'"
     assert ".workflow_run.head_branch == $head_ref" in closed["steps"][0]["run"]
-    assert ".workflow_run.head_repository_id | tostring" in closed["steps"][0]["run"]
+    assert "(.workflow_run.head_repository_id | tostring) == $head_repository_id" in (
+        closed["steps"][0]["run"]
+    )
     assert closed["steps"][0]["env"]["PR_CREATED_AT"] == (
         "${{ github.event.pull_request.created_at }}"
     )
