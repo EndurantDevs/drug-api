@@ -152,6 +152,8 @@ def _git_diff(root: Path, base_revision: str) -> str:
             check=True,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
         ).stdout
     except (OSError, subprocess.CalledProcessError) as exc:
         raise CoverageRatchetError(
@@ -174,6 +176,10 @@ def _coveragepy_line_sets(payload: dict[str, Any], label: str) -> tuple[set[int]
     missing = _line_set(payload.get("missing_lines"), f"{label} missing_lines")
     if executed & missing:
         raise CoverageRatchetError(f"{label} coverage line sets overlap")
+    excluded = _line_set(payload.get("excluded_lines", []), f"{label} excluded_lines")
+    if excluded & missing:
+        raise CoverageRatchetError(f"{label} excluded and missing lines overlap")
+    executed -= excluded
     summary = payload.get("summary", {})
     if not isinstance(summary, dict):
         raise CoverageRatchetError(f"{label} line summary is malformed")

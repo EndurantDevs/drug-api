@@ -4,10 +4,12 @@ import argparse
 import copy
 import importlib
 import json
+import runpy
 import subprocess
 import sys
 from pathlib import Path
 
+import coverage
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,6 +71,26 @@ def test_machine_requirement_and_report_identity_cannot_be_removed(tmp_path):
         forecast._write_forecast_baselines(tmp_path, tmp_path, candidate, baseline, tmp_path / "missing.json")
 
 
+@pytest.mark.parametrize("field, value", [("metrics", None), ("metrics", {}),
+                                       ("files", None), ("files", "sample.py"), ("files", [None])])
+def test_malformed_tracked_report_produces_forecast_diagnostics(tmp_path, monkeypatch, field, value):
+    tracked = growth.build_diff_policy_test_baseline()["reports"]["python"]
+    measured = copy.deepcopy(tracked)
+    tracked[field] = value
+
+    def reject_report(*_):
+        forecast._require_artifact_report("python", measured, tracked)
+
+    monkeypatch.setattr(forecast, "run_forecast", reject_report)
+    output = tmp_path / "forecast.json"
+    baseline_output = tmp_path / "machine.json"
+    assert forecast.main(["forecast", "--base", "a" * 40, "--report", "unused.json",
+                          "--provenance", "unused-provenance.json", "--output", str(output),
+                          "--baseline-output", str(baseline_output)]) == 2
+    assert "malformed" in output.read_text()
+    assert not baseline_output.exists()
+
+
 @pytest.mark.parametrize("line_record", [
     {"executed_lines": [], "missing_lines": [], "summary": {"covered_lines": 1, "num_statements": 1}},
     {"executed_lines": [1, 1], "missing_lines": []},
@@ -76,18 +98,40 @@ def test_machine_requirement_and_report_identity_cannot_be_removed(tmp_path):
     {"executed_lines": [True], "missing_lines": []},
     {"executed_lines": [1], "missing_lines": [], "summary": {"covered_lines": 2, "num_statements": 2}},
     {"executed_lines": [1], "missing_lines": [], "summary": []},
+    {"executed_lines": [1], "missing_lines": [], "excluded_lines": None},
+    {"executed_lines": [1], "missing_lines": [2], "excluded_lines": [2]},
 ])
 def test_malformed_line_records_fail_closed(line_record):
     with pytest.raises(reports.CoverageRatchetError):
         growth._coveragepy_line_sets(line_record, "sample.py")
 
 
-def test_real_gate_enforces_changed_line_boundary(tmp_path, monkeypatch):
+def test_real_coverage_excluded_execution_is_not_a_statement(tmp_path):
+    sample = tmp_path / "sample.py"
+    sample.write_text("TYPE_CHECKING = True\nif TYPE_CHECKING:\n    excluded = 1\ncovered = 2\n")
+    report_path = tmp_path / "coverage.json"
+    measured = coverage.Coverage(data_file=None, config_file=False)
+    measured.start()
+    try:
+        runpy.run_path(str(sample))
+    finally:
+        measured.stop()
+    measured.json_report(morfs=[str(sample)], outfile=str(report_path))
+    payload = next(iter(json.loads(report_path.read_text())["files"].values()))
+    assert payload["excluded_lines"] == [2, 3]
+    assert growth._coveragepy_line_sets(payload, "sample.py") == ({1, 4}, {1, 4})
+    config = growth.build_diff_policy_test_baseline()["reports"]["python"]
+    result = growth._report_diff_coverage(tmp_path, "python", config, {"sample.py": {3}})
+    assert (result["covered"], result["total"]) == (0, 0)
+    growth.run_exclusion_guard_self_test()
+
+
+def test_real_gate_enforces_changed_line_boundary(tmp_path, monkeypatch, capsys):
     (tmp_path / "sample.py").write_text("answer = 1\n" * 20)
     baseline = growth.build_diff_policy_test_baseline()
     baseline["schema_version"] = 1
     candidate = copy.deepcopy(baseline)
-    candidate["reports"]["python"]["metrics"]["lines"] = {"covered": 17, "total": 20}
+    candidate["reports"]["python"]["metrics"]["lines"] = {"covered": 16, "total": 20}
     (tmp_path / "baseline.json").write_text(json.dumps(candidate))
     (tmp_path / "reference.json").write_text(json.dumps(baseline))
     coverage_by_field = {"files": {"sample.py": {
@@ -109,6 +153,7 @@ def test_real_gate_enforces_changed_line_boundary(tmp_path, monkeypatch):
     coverage_by_field["files"]["sample.py"]["summary"]["covered_lines"] = 16
     report_path.write_text(json.dumps(coverage_by_field))
     assert ratchet._execute_gate(args) == 1
+    assert "ERROR: python: diff coverage 80.00% is below 85%" in capsys.readouterr().out
     with pytest.raises(reports.CoverageRatchetError, match="absent from coverage"):
         growth._report_diff_coverage(tmp_path, "python", candidate["reports"]["python"],
                                      {"missing.py": {1}})
@@ -132,24 +177,37 @@ def test_machine_snapshot_has_matching_generated_docs(tmp_path):
     reports.check_baseline_docs(ROOT / "docs/test-coverage.md", configured)
 
 
+def test_cli_rejects_unknown_report_before_diff_scan(tmp_path, monkeypatch):
+    baseline = growth.build_diff_policy_test_baseline()
+    baseline["schema_version"] = 1
+    (tmp_path / "baseline.json").write_text(json.dumps(baseline))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ratchet, "collect_diff_coverage", lambda *_: pytest.fail("diff scan reached"))
+    args = argparse.Namespace(baseline="baseline.json", reference_baseline="unused.json",
+                              changed_since="base", report_names=["unknown"], write_baseline=False)
+    with pytest.raises(reports.CoverageRatchetError, match="unknown baseline reports: unknown"):
+        ratchet._execute_gate(args)
+
+
 def _commit_fixture(root):
     subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                     "-c", "user.name=Policy Test", "-c", "user.email=policy@example.invalid",
                     "commit", "-qam", "fixture"], cwd=root, check=True)
 
 
-def test_diff_paths_ignore_user_noprefix_setting(tmp_path):
+def test_diff_paths_ignore_user_noprefix_setting(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "config", "diff.noprefix", "true"], cwd=tmp_path, check=True)
-    sample = tmp_path / "sample.py"
+    sample = tmp_path / "café.py"
     sample.write_text("answer = 1\n")
-    subprocess.run(["git", "add", "sample.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "café.py"], cwd=tmp_path, check=True)
     _commit_fixture(tmp_path)
     base_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
                               capture_output=True, text=True).stdout.strip()
     sample.write_text("answer = 2\n")
     _commit_fixture(tmp_path)
-    assert growth.changed_lines_from_diff(growth._git_diff(tmp_path, base_sha)) == {"sample.py": {1}}
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "ascii")
+    assert growth.changed_lines_from_diff(growth._git_diff(tmp_path, base_sha)) == {"café.py": {1}}
 
 
 def test_soft_length_and_renamed_huge_file_growth(tmp_path):

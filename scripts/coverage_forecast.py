@@ -174,13 +174,18 @@ def _base_baseline(root: Path, base_sha: str, output_path: Path) -> dict[str, An
 
 
 def _require_artifact_report(name: str, measured: Any, tracked: dict[str, Any]) -> None:
+    if not isinstance(tracked, dict):
+        raise CoverageForecastError(f"{name}: base report is malformed")
     if not isinstance(measured, dict):
         raise CoverageForecastError(f"{name}: machine report is malformed")
     for field in ("format", "path", "scope", "growth"):
         if measured.get(field) != tracked.get(field):
             raise CoverageForecastError(f"{name}: machine baseline {field} differs from base")
     metrics_by_name = measured.get("metrics")
-    if not isinstance(metrics_by_name, dict) or set(metrics_by_name) != set(tracked["metrics"]):
+    tracked_metrics = tracked.get("metrics")
+    if not isinstance(tracked_metrics, dict) or not tracked_metrics:
+        raise CoverageForecastError(f"{name}: base baseline metrics are malformed")
+    if not isinstance(metrics_by_name, dict) or set(metrics_by_name) != set(tracked_metrics):
         raise CoverageForecastError(f"{name}: machine baseline metrics differ from base")
     for metric_name, counts_by_name in metrics_by_name.items():
         if not isinstance(counts_by_name, dict):
@@ -189,7 +194,10 @@ def _require_artifact_report(name: str, measured: Any, tracked: dict[str, Any]) 
     files = measured.get("files")
     if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
         raise CoverageForecastError(f"{name}: machine baseline files are malformed")
-    if not set(tracked.get("files", [])).issubset(files):
+    tracked_files = tracked.get("files", [])
+    if not isinstance(tracked_files, list) or not all(isinstance(path, str) for path in tracked_files):
+        raise CoverageForecastError(f"{name}: base baseline files are malformed")
+    if not set(tracked_files).issubset(files):
         raise CoverageForecastError(f"{name}: machine baseline dropped source files")
 
 
