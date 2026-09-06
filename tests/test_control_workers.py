@@ -68,7 +68,7 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
         return {"items": []}
 
     monkeypatch.setenv("HLTHPRT_WORKER_LAUNCHER", "kubernetes")
-    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "ghcr.io/endurantdevs/drug-api:dev")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "ghcr.io/example/drug-api:test")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_ENV_FROM_CONFIGMAP", "drug-api-config")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_ENV_FROM_SECRET", "drug-api-secret")
     monkeypatch.setenv("HLTHPRT_WORKER_JOB_PVC_NAME", "import-workdir")
@@ -93,7 +93,7 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     assert post[1] == "/apis/batch/v1/namespaces/healthporta-dev/jobs"
     assert job["kind"] == "Job"
     container = job["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"] == "ghcr.io/endurantdevs/drug-api:dev"
+    assert container["image"] == "ghcr.io/example/drug-api:test"
     assert container["command"][-2:] == ["process.NDC", "--burst"]
     assert {"name": "HLTHPRT_IMPORT_ID_OVERRIDE", "value": "import_123"} in container["env"]
     assert {"configMapRef": {"name": "drug-api-config"}} in container["envFrom"]
@@ -124,7 +124,7 @@ def test_kubernetes_completed_worker_job_is_recreated(monkeypatch):
         return {}
 
     monkeypatch.setenv("HLTHPRT_WORKER_LAUNCHER", "kubernetes")
-    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "ghcr.io/endurantdevs/drug-api:dev")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "ghcr.io/example/drug-api:test")
     monkeypatch.setenv("HLTHPRT_IMPORT_NODE_ID", "local_drug")
     monkeypatch.setattr(control_workers, "_kubernetes_configured", lambda: True)
     monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "healthporta-dev")
