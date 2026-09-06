@@ -5,7 +5,6 @@ ARG PIP_VERSION=26.2.1
 LABEL org.opencontainers.image.revision=${HLTHPRT_SOURCE_COMMIT}
 
 WORKDIR /wheels
-ADD ./requirements-dev.txt /wheels
 ADD ./requirements.txt /wheels
 
 WORKDIR /opt
@@ -15,7 +14,8 @@ RUN apt-get update \
     && python3 -m venv venv \
     && . venv/bin/activate \
     && pip install --no-compile "pip==${PIP_VERSION}" \
-    && pip install --no-compile -r /wheels/requirements-dev.txt -f /wheels \
+    && pip install --no-compile -r /wheels/requirements.txt -f /wheels \
+    && pip check \
     && install -d -o nobody -g nogroup -m 755 /run /var/log/nginx \
     && install -d -o nobody -g nogroup -m 700 \
         /var/lib/nginx/body \
@@ -40,7 +40,7 @@ ARG HLTHPRT_DB_HOST=localhost
 ARG HLTHPRT_DB_PORT=5432
 ARG HLTHPRT_DB_DATABASE=healthporta
 ARG HLTHPRT_DB_SCHEMA='rx_data'
-ARG HLTHPRT_DB_USER=dmytro
+ARG HLTHPRT_DB_USER=postgres
 ARG HLTHPRT_REDIS_ADDRESS=redis://localhost:6379
 
 ARG HLTHPRT_MAIN_RX_JSON_URL='https://api.fda.gov/download.json'
