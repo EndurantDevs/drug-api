@@ -22,4 +22,5 @@ def test_example_environment_loads_cli():
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert "server" in result.stdout and "worker" in result.stdout
+    assert "server" in result.stdout
+    assert "worker" in result.stdout

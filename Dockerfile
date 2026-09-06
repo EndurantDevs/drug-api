@@ -40,7 +40,7 @@ ARG HLTHPRT_DB_HOST=localhost
 ARG HLTHPRT_DB_PORT=5432
 ARG HLTHPRT_DB_DATABASE=healthporta
 ARG HLTHPRT_DB_SCHEMA='rx_data'
-ARG HLTHPRT_DB_USER=postgres
+ARG HLTHPRT_DB_USER=drug_api
 ARG HLTHPRT_REDIS_ADDRESS=redis://localhost:6379
 
 ARG HLTHPRT_MAIN_RX_JSON_URL='https://api.fda.gov/download.json'

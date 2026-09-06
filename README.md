@@ -65,12 +65,14 @@ python -m pip install -r requirements-dev.txt
 cp .env.example .env
 ```
 
-Set the PostgreSQL account and password in `.env` to match your local server.
-The following database commands use the sample's `postgres` account:
+Create a dedicated application role using your local PostgreSQL administrator
+(shown as `postgres`), then put that role's password in `.env`:
 
 ```bash
-createdb --host=127.0.0.1 --username=postgres drug_api
-psql --host=127.0.0.1 --username=postgres --dbname=drug_api \
+createuser --host=127.0.0.1 --username=postgres --no-superuser \
+  --no-createdb --no-createrole --pwprompt drug_api
+createdb --host=127.0.0.1 --username=postgres --owner=drug_api drug_api
+psql --host=127.0.0.1 --username=drug_api --dbname=drug_api \
   --command='CREATE SCHEMA IF NOT EXISTS rx_data'
 python main.py db migrate
 python main.py server start --host 127.0.0.1 --port 8080
