@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -15,11 +16,21 @@ from .function_names import confusable_function_name_issues
 from .model import DEFAULT_ISSUE_CATEGORIES, Issue
 
 
-def collect_issues(repo_root: Path, config: dict[str, Any]) -> dict[str, list[Issue]]:
+def collect_issues(
+    repo_root: Path,
+    config: dict[str, Any],
+    base_revision: str | None = None,
+) -> dict[str, list[Issue]]:
     """Collect readability findings grouped by rule category."""
     patterns = compile_suppression_patterns(config)
     issues_by_category: dict[str, list[Issue]] = {category: [] for category in DEFAULT_ISSUE_CATEGORIES}
     source_files = _iter_source_files(repo_root, config)
+    length_config_by_field = dict(config, source_roots=readability_options(config).get("file_length_roots", config.get("source_roots", [])))
+    length_files = _iter_source_files(repo_root, length_config_by_field)
+    for path in sorted(set(length_files) - set(source_files)):
+        issues_by_category["long_files"].extend(
+            _file_size_issues(path.relative_to(repo_root).as_posix(), path, config)
+        )
     for path in source_files:
         for issue in _analyze_file(repo_root, path, config):
             issues_by_category[issue.category].append(issue)
@@ -30,7 +41,11 @@ def collect_issues(repo_root: Path, config: dict[str, Any]) -> dict[str, list[Is
     issues_by_category["confusable_function_names"].extend(
         confusable_function_name_issues(repo_root, python_paths)
     )
-    return {category: sorted(values, key=lambda issue: issue.identifier) for category, values in issues_by_category.items()}
+    if base_revision:
+        issues_by_category["huge_file_growth"].extend(
+            _huge_file_growth_issues(repo_root, length_files, config, base_revision)
+        )
+    return {category: sorted(issues, key=lambda issue: issue.identifier) for category, issues in issues_by_category.items()}
 
 
 def _iter_source_files(repo_root: Path, config: dict[str, Any]) -> list[Path]:
@@ -136,7 +151,7 @@ def _comment_noise_issue(
 
 def _analyze_file(repo_root: Path, path: Path, config: dict[str, Any]) -> list[Issue]:
     relative = path.relative_to(repo_root).as_posix()
-    issues = _file_size_issues(relative, path, config)
+    issues = _file_size_issues(relative, path, config) if _is_file_length_path(relative, config) else []
     if path.suffix != ".py":
         return issues
     try:
@@ -156,9 +171,142 @@ def _analyze_file(repo_root: Path, path: Path, config: dict[str, Any]) -> list[I
     return issues
 
 
+def _huge_file_git_issue(name: str, path: str = ".") -> Issue:
+    return Issue(
+        "huge_file_growth",
+        f"huge_file_growth:git:{name}:{path}",
+        path,
+        {"line": 1, "name": name},
+    )
+
+
+def _renamed_base_path_by_current(
+    repo_root: Path,
+    base_revision: str,
+) -> tuple[dict[str, str], Issue | None]:
+    completed = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames=1%",
+            f"{base_revision}..HEAD",
+            "--",
+        ],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if completed.returncode:
+        return {}, _huge_file_git_issue("base diff unavailable")
+    fields = completed.stdout.split(b"\0")
+    renamed_base_path_by_current: dict[str, str] = {}
+    field_index = 0
+    while field_index < len(fields) and fields[field_index]:
+        status = fields[field_index].decode("utf-8")
+        field_index += 1
+        if "\t" in status:
+            status, base_path = status.split("\t", 1)
+        else:
+            base_path = fields[field_index].decode("utf-8")
+            field_index += 1
+        if not status.startswith(("R", "C")):
+            continue
+        current_path = fields[field_index].decode("utf-8")
+        field_index += 1
+        if status.startswith("R"):
+            renamed_base_path_by_current[current_path] = base_path
+    return renamed_base_path_by_current, None
+
+
+def _base_file_lines(
+    repo_root: Path,
+    base_revision: str,
+    relative: str,
+) -> tuple[int | None, Issue | None]:
+    listing = subprocess.run(
+        ["git", "ls-tree", "-z", "--name-only", base_revision, "--", relative],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if listing.returncode:
+        return None, _huge_file_git_issue("base tree unavailable", relative)
+    if not listing.stdout:
+        return None, None
+    completed = subprocess.run(
+        ["git", "show", f"{base_revision}:{relative}"],
+        cwd=repo_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if completed.returncode:
+        return None, _huge_file_git_issue("base file unavailable", relative)
+    return len(completed.stdout.splitlines()), None
+
+
+def _huge_file_growth_issues(
+    repo_root: Path,
+    source_files: list[Path],
+    config: dict[str, Any],
+    base_revision: str,
+) -> list[Issue]:
+    threshold_lines = threshold(config, "huge_file_lines", 5000)
+    verify_base = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{base_revision}^{{commit}}"],
+        cwd=repo_root,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if verify_base.returncode:
+        return [_huge_file_git_issue("base revision unavailable")]
+    renamed_base_path_by_current, rename_error = _renamed_base_path_by_current(
+        repo_root, base_revision
+    )
+    if rename_error:
+        return [rename_error]
+    issues: list[Issue] = []
+    for path in source_files:
+        relative = path.relative_to(repo_root).as_posix()
+        current_lines = _line_count(path)
+        if current_lines <= threshold_lines or not _is_file_length_path(relative, config):
+            continue
+        base_relative = renamed_base_path_by_current.get(relative, relative)
+        base_lines, lookup_error = _base_file_lines(
+            repo_root,
+            base_revision,
+            base_relative,
+        )
+        if lookup_error:
+            issues.append(lookup_error)
+            continue
+        if base_lines is None:
+            continue
+        if base_lines > threshold_lines and current_lines > base_lines:
+            issues.append(
+                Issue(
+                    "huge_file_growth",
+                    f"huge_file_growth:{relative}",
+                    relative,
+                    {"line": 1, "lines": current_lines, "limit": base_lines},
+                )
+            )
+    return issues
+
+
+def _is_file_length_path(relative: str, config: dict[str, Any]) -> bool:
+    roots = readability_options(config).get("file_length_roots", config.get("source_roots", []))
+    return any(relative == root or relative.startswith(f"{root.rstrip('/')}/") for root in roots)
+
+
 def _file_size_issues(relative: str, path: Path, config: dict[str, Any]) -> list[Issue]:
     file_lines = _line_count(path)
-    max_file_lines = threshold(config, "max_file_lines", 500)
+    max_file_lines = threshold(config, "max_file_lines", 1500)
     if file_lines <= max_file_lines:
         return []
     return [

@@ -35,7 +35,12 @@ and prevent new debt from entering unnoticed.
 
 ## Thresholds
 
-- Source files over 500 lines are reported.
+- Product Python files over 1500 lines are soft warnings, not failures.
+  File-length checks cover `main.py`, `api/`, `db/`, and `process/`;
+  scripts and tests keep other rules without a file-length gate.
+  Existing generated, cache, and service exclusions remain unchanged.
+- Existing product files above 5000 physical lines may not grow against the
+  exact target base, including after a rename.
 - Python functions over 60 lines are reported.
 - Python nesting deeper than 4 control-flow levels is reported.
 - Inline suppressions are reported and blocked when new.
@@ -47,8 +52,12 @@ and prevent new debt from entering unnoticed.
   bodies, and noisy comments.
 
 Existing debt IDs are stored in `readability-baseline.json`. The CI check fails
-only when new debt appears relative to that baseline. When debt is removed or the
-rules intentionally change, regenerate the baseline in the same change:
+only when new blocking debt appears relative to that baseline. Soft file-length
+warnings never require artificial file splits. Existing debt reduction belongs
+in scheduled refactor work, not a compulsory per-PR payment. This policy change
+regenerates the baseline once after verifying that no new blocking findings
+were introduced. Do not regenerate it to make later failures pass; reduce it
+only when the corresponding debt is actually removed:
 
 ```bash
 python scripts/readability_budget.py --write-baseline
@@ -57,5 +66,5 @@ python scripts/readability_budget.py --write-baseline
 Normal local check:
 
 ```bash
-python scripts/readability_budget.py
+python scripts/readability_budget.py --base origin/main
 ```

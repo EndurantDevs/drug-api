@@ -14,9 +14,11 @@ DEFAULT_CONFIG = "readability-budget.json"
 DEFAULT_BASELINE = "readability-baseline.json"
 
 
-def build_snapshot(repo_root: Path, config: dict[str, Any]) -> dict[str, Any]:
+def build_snapshot(
+    repo_root: Path, config: dict[str, Any], base_revision: str | None = None,
+) -> dict[str, Any]:
     """Build the deterministic readability snapshot used for gating."""
-    issues_by_category = collect_issues(repo_root, config)
+    issues_by_category = collect_issues(repo_root, config, base_revision)
     return {
         "version": 1,
         "rules": _rules_snapshot(config),
@@ -38,6 +40,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--baseline", default=DEFAULT_BASELINE)
+    parser.add_argument("--base", help="Git revision used for huge-file growth checks")
     parser.add_argument("--write-baseline", action="store_true")
     return parser.parse_args(argv)
 
@@ -49,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     config_path = repo_root / args.config
     baseline_path = repo_root / args.baseline
     config = _load_json(config_path)
-    snapshot = build_snapshot(repo_root, config)
+    snapshot = build_snapshot(repo_root, config, args.base)
     _print_summary(snapshot)
     if args.write_baseline:
         baseline_path.write_text(
@@ -108,6 +111,8 @@ def _issue_ids(snapshot: dict[str, Any], category: str) -> set[str]:
 def _new_issues(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
     new_by_category: dict[str, list[dict[str, Any]]] = {}
     for category, current_issues in current.get("issues", {}).items():
+        if category == "long_files":
+            continue
         baseline_ids = _issue_ids(baseline, category)
         new_items = [issue for issue in current_issues if issue["id"] not in baseline_ids]
         if new_items:
@@ -119,6 +124,8 @@ def _print_summary(snapshot: dict[str, Any]) -> None:
     print("Readability budget summary:")
     for category, count in sorted(snapshot["issue_counts"].items()):
         print(f"  {category}: {count}")
+    for issue in snapshot.get("issues", {}).get("long_files", []):
+        print(f"  soft file-length overrun: {issue['path']} ({issue['lines']} lines)")
 
 
 def _print_new_issues(new_by_category: dict[str, list[dict[str, Any]]]) -> None:

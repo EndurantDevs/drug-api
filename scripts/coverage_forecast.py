@@ -16,8 +16,8 @@ from typing import Any, Sequence
 from coverage import __version__ as coverage_package_version
 
 from coverage_forecast_reporting import build_forecast_diagnostics
-from coverage_ratchet import _compare_baselines, _load_baseline
-from coverage_reports import CoverageRatchetError, _collect_report
+from coverage_ratchet import _load_baseline
+from coverage_reports import CoverageRatchetError, _collect_report, _metric, _updated_docs
 
 
 BASELINE_NAME = "test-coverage-baseline.json"
@@ -39,10 +39,10 @@ def git_output(root: Path, *arguments: str) -> str:
             capture_output=True,
             text=True,
         )
-    except (OSError, subprocess.CalledProcessError) as error:
+    except (OSError, subprocess.CalledProcessError) as exc:
         raise CoverageForecastError(
             f"could not resolve coverage forecast Git identity: {' '.join(arguments)}"
-        ) from error
+        ) from exc
     return completed_process.stdout.strip()
 
 
@@ -66,8 +66,8 @@ def _sha256_file(path: Path) -> str:
 
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError as error:
-        raise CoverageForecastError(f"missing coverage forecast file: {path}") from error
+    except OSError as exc:
+        raise CoverageForecastError(f"missing coverage forecast file: {path}") from exc
 
 
 def _resolve_repository_report_path(root: Path, path: Path) -> Path:
@@ -77,10 +77,10 @@ def _resolve_repository_report_path(root: Path, path: Path) -> Path:
     try:
         resolved_path = candidate_path.resolve()
         resolved_path.relative_to(root.resolve())
-    except ValueError as error:
+    except ValueError as exc:
         raise CoverageForecastError(
             f"coverage report must be inside the repository: {path}"
-        ) from error
+        ) from exc
     return resolved_path
 
 
@@ -130,10 +130,10 @@ def _read_provenance(path: Path) -> dict[str, Any]:
 
     try:
         document_by_name = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CoverageForecastError(
             f"invalid coverage provenance: {path}"
-        ) from error
+        ) from exc
     if not isinstance(document_by_name, dict):
         raise CoverageForecastError("coverage provenance must be a JSON object")
     return document_by_name
@@ -173,6 +173,77 @@ def _base_baseline(root: Path, base_sha: str, output_path: Path) -> dict[str, An
     return _load_baseline(output_path)
 
 
+def _require_artifact_report(name: str, measured: Any, tracked: dict[str, Any]) -> None:
+    if not isinstance(tracked, dict):
+        raise CoverageForecastError(f"{name}: base report is malformed")
+    if not isinstance(measured, dict):
+        raise CoverageForecastError(f"{name}: machine report is malformed")
+    for field in ("format", "path", "scope", "growth"):
+        if measured.get(field) != tracked.get(field):
+            raise CoverageForecastError(f"{name}: machine baseline {field} differs from base")
+    metrics_by_name = measured.get("metrics")
+    tracked_metrics = tracked.get("metrics")
+    if not isinstance(tracked_metrics, dict) or not tracked_metrics:
+        raise CoverageForecastError(f"{name}: base baseline metrics are malformed")
+    if not isinstance(metrics_by_name, dict) or set(metrics_by_name) != set(tracked_metrics):
+        raise CoverageForecastError(f"{name}: machine baseline metrics differ from base")
+    for metric_name, counts_by_name in metrics_by_name.items():
+        if not isinstance(counts_by_name, dict):
+            raise CoverageForecastError(f"{name}.{metric_name}: machine metric is malformed")
+        _metric(counts_by_name.get("covered"), counts_by_name.get("total"), metric_name)
+    files = measured.get("files")
+    if not isinstance(files, list) or not all(isinstance(path, str) for path in files):
+        raise CoverageForecastError(f"{name}: machine baseline files are malformed")
+    tracked_files = tracked.get("files", [])
+    if not isinstance(tracked_files, list) or not all(isinstance(path, str) for path in tracked_files):
+        raise CoverageForecastError(f"{name}: base baseline files are malformed")
+    if not set(tracked_files).issubset(files):
+        raise CoverageForecastError(f"{name}: machine baseline dropped source files")
+
+
+def _reference_baseline(
+    tracked: dict[str, Any], base_sha: str, artifact_path: Path | None,
+) -> dict[str, Any]:
+    """Require exact main evidence after the one-time legacy bootstrap."""
+
+    if tracked.get("machine_artifact_required") is not True:
+        return tracked
+    if artifact_path is None:
+        raise CoverageForecastError(f"base {base_sha} requires its 90-day coverage baseline artifact")
+    artifact = _load_baseline(artifact_path)
+    if artifact.get("source_sha") != base_sha:
+        raise CoverageForecastError(f"machine baseline source_sha must equal base {base_sha}")
+    if artifact.get("machine_artifact_required") is not True:
+        raise CoverageForecastError("machine baseline requirement is missing")
+    if set(artifact["reports"]) != set(tracked["reports"]):
+        raise CoverageForecastError("machine baseline reports differ from base")
+    for name, report_by_name in tracked["reports"].items():
+        _require_artifact_report(name, artifact["reports"][name], report_by_name)
+    return artifact
+
+
+def _require_report_path_parity(candidate: dict[str, Any], reference: dict[str, Any]) -> None:
+    if set(candidate["reports"]) != {"python"} or set(reference["reports"]) != {"python"}:
+        raise CoverageForecastError("single-report forecast requires exactly the python report")
+    if candidate["reports"]["python"].get("path") != reference["reports"]["python"].get("path"):
+        raise CoverageForecastError("python: baseline path changed")
+
+
+def _write_measured_baseline(
+    root: Path, output: Path, measured: dict[str, Any], configured: dict[str, Any], head_sha: str,
+) -> None:
+    """Publish successful metrics and matching docs outside the frozen source."""
+
+    baseline_by_name = deepcopy(measured)
+    baseline_by_name.update(source_sha=head_sha, machine_artifact_required=True)
+    baseline_by_name["reports"]["python"]["path"] = configured["reports"]["python"]["path"]
+    _write_json(output, baseline_by_name)
+    docs_text = (root / "docs/test-coverage.md").read_text(encoding="utf-8")
+    output.with_name("test-coverage.md").write_text(
+        _updated_docs(docs_text, _load_baseline(output)), encoding="utf-8"
+    )
+
+
 def _with_report_path(baseline_by_name: dict[str, Any], report_path: Path) -> dict[str, Any]:
     """Point a copied baseline at the actual CI report without mutating source data."""
 
@@ -188,7 +259,7 @@ def _with_report_snapshot(
     baseline_by_name: dict[str, Any],
     report_path: Path,
 ) -> dict[str, Any]:
-    """Stage one candidate baseline with the exact CI report snapshot."""
+    """Stage one candidate baseline with the exact report metrics and files."""
 
     temporary_baseline_by_name = _with_report_path(baseline_by_name, report_path)
     candidate_report_by_name = temporary_baseline_by_name["reports"]["python"]
@@ -205,8 +276,9 @@ def _write_forecast_baselines(
     reference_baseline: dict[str, Any],
     report_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], Path, Path]:
-    """Stage one report snapshot for the candidate and base metrics for reference."""
+    """Stage one report snapshot for the candidate and base data for reference."""
 
+    _require_report_path_parity(candidate_baseline, reference_baseline)
     candidate_snapshot_baseline = _with_report_snapshot(
         root,
         candidate_baseline,
@@ -264,9 +336,18 @@ def _ratchet_errors(ratchet: subprocess.CompletedProcess[str]) -> list[str]:
 def _print_forecast_summary(
     diagnostics_by_name: dict[str, Any],
     output_path: Path | None,
+    ratchet: subprocess.CompletedProcess[str],
 ) -> None:
     """Print compact CI guidance while preserving detailed arcs in the artifact."""
 
+    diagnostics_by_name["ratchet_errors"] = _ratchet_errors(ratchet)
+    diagnostics_by_name["ratchet_exit_code"] = ratchet.returncode
+    if output_path is not None:
+        _write_json(output_path, diagnostics_by_name)
+    if ratchet.stdout:
+        print(ratchet.stdout, end="")
+    if ratchet.stderr:
+        print(ratchet.stderr, file=sys.stderr, end="")
     report_by_name = diagnostics_by_name["reports"]["python"]
     changed_line_count = report_by_name["changed_source_lines"]
     print(
@@ -279,9 +360,11 @@ def _print_forecast_summary(
         print(
             f"coverage forecast {metric_name}: "
             f"missing={metric_by_name['current_missing']} "
-            f"cap={metric_by_name['effective_missing_cap']} "
-            f"margin={metric_by_name['margin']}"
+            f"ratio_delta={metric_by_name['ratio_delta']:.4f}"
         )
+    diff_by_field = report_by_name["diff_coverage"]
+    print(f"coverage forecast diff: {diff_by_field['covered']}/{diff_by_field['total']} "
+          f"executable changed lines; threshold {diff_by_field['threshold']}%")
     if output_path is not None:
         print(f"coverage forecast diagnostics: {output_path}")
 
@@ -292,6 +375,8 @@ def run_forecast(
     report_path: Path,
     provenance_path: Path,
     output_path: Path | None,
+    reference_artifact_path: Path | None = None,
+    baseline_output_path: Path | None = None,
 ) -> int:
     """Verify one report, run the production ratchet, and emit useful diagnostics."""
 
@@ -312,9 +397,9 @@ def run_forecast(
             base_sha,
             temp_directory / "reference-baseline.json",
         )
-        baseline_errors = _compare_baselines(candidate_baseline, reference_baseline)
-        if baseline_errors:
-            raise CoverageForecastError("; ".join(baseline_errors))
+        reference_baseline = _reference_baseline(
+            reference_baseline, base_sha, reference_artifact_path
+        )
         (
             candidate_snapshot_baseline,
             reference_report_baseline,
@@ -336,15 +421,11 @@ def run_forecast(
             reference_report_baseline,
             resolved_report_path,
         )
-    diagnostics_by_name["ratchet_errors"] = _ratchet_errors(ratchet)
-    diagnostics_by_name["ratchet_exit_code"] = ratchet.returncode
-    if output_path is not None:
-        _write_json(output_path, diagnostics_by_name)
-    if ratchet.stdout:
-        print(ratchet.stdout, end="")
-    if ratchet.stderr:
-        print(ratchet.stderr, file=sys.stderr, end="")
-    _print_forecast_summary(diagnostics_by_name, output_path)
+        if ratchet.returncode == 0 and baseline_output_path is not None:
+            _write_measured_baseline(
+                root, baseline_output_path, candidate_snapshot_baseline, candidate_baseline, head_sha
+            )
+    _print_forecast_summary(diagnostics_by_name, output_path, ratchet)
     return ratchet.returncode
 
 
@@ -360,6 +441,8 @@ def _parse_arguments(raw_arguments: Sequence[str] | None = None) -> argparse.Nam
     forecast_parser.add_argument("--report", type=Path, required=True)
     forecast_parser.add_argument("--provenance", type=Path, required=True)
     forecast_parser.add_argument("--output", type=Path)
+    forecast_parser.add_argument("--reference-baseline", type=Path)
+    forecast_parser.add_argument("--baseline-output", type=Path)
     return parser.parse_args(raw_arguments)
 
 
@@ -393,6 +476,8 @@ def main(raw_arguments: Sequence[str] | None = None) -> int:
             arguments.report,
             arguments.provenance,
             arguments.output,
+            arguments.reference_baseline,
+            arguments.baseline_output,
         )
     except (CoverageForecastError, CoverageRatchetError) as error:
         _write_forecast_error(getattr(arguments, "output", None), error)

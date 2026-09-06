@@ -19,6 +19,7 @@ DEFAULT_ISSUE_CATEGORIES = (
     "global_state_usage",
     "inline_suppressions",
     "long_files",
+    "huge_file_growth",
     "long_functions",
     "missing_contract_docstrings",
     "pass_placeholders",
