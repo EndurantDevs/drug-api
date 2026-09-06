@@ -5,11 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from coverage_growth import (
-    calculate_required_debt_reduction,
-    collect_growth_evidence,
-    load_growth_policy,
-)
+from coverage_growth import collect_diff_coverage
 from coverage_reports import (
     _collect_report,
     _is_path_in_scope,
@@ -65,11 +61,8 @@ def _normalized_branch_arcs(raw_arcs: Any) -> list[list[int]]:
 def _metric_diagnostics(
     current_metric_by_name: dict[str, int],
     base_metric_by_name: dict[str, int],
-    target_percent: int,
-    growth_policy_by_name: dict[str, Any],
-    changed_line_count: int,
-) -> dict[str, int]:
-    """Return the exact debt cap and margin used by the ratchet policy."""
+) -> dict[str, int | float]:
+    """Return ratio changes and uncovered counts without an absolute cap."""
 
     current_missing_count = (
         current_metric_by_name["total"] - current_metric_by_name["covered"]
@@ -77,27 +70,13 @@ def _metric_diagnostics(
     base_missing_count = (
         base_metric_by_name["total"] - base_metric_by_name["covered"]
     )
-    is_at_target = (
-        current_metric_by_name["covered"] * 100
-        >= target_percent * current_metric_by_name["total"]
-    )
-    required_reduction = 0
-    if not is_at_target and changed_line_count:
-        required_reduction = calculate_required_debt_reduction(
-            base_metric_by_name,
-            target_percent,
-            growth_policy_by_name["debt_reduction_percent"],
-            changed_line_count,
-            growth_policy_by_name["changed_line_divisor"],
-        )
-    effective_missing_cap = base_missing_count - required_reduction
     return {
         "base_missing": base_missing_count,
         "current_missing": current_missing_count,
-        "effective_missing_cap": effective_missing_cap,
-        "margin": effective_missing_cap - current_missing_count,
-        "required_growth_reduction": required_reduction,
-        "target_percent": target_percent,
+        "covered": current_metric_by_name["covered"],
+        "total": current_metric_by_name["total"],
+        "ratio_delta": 100 * current_metric_by_name["covered"] / current_metric_by_name["total"]
+        - 100 * base_metric_by_name["covered"] / base_metric_by_name["total"],
     }
 
 
@@ -114,23 +93,19 @@ def build_forecast_diagnostics(
     report_name = "python"
     candidate_report = candidate_baseline["reports"][report_name]
     reference_report = reference_baseline["reports"][report_name]
-    changed_by_report, exclusion_errors = collect_growth_evidence(
+    diff_by_report, exclusion_errors = collect_diff_coverage(
         root,
         base_sha,
         candidate_baseline,
         [report_name],
     )
     current_snapshot = _collect_report(root, report_name, candidate_report)
-    growth_policy_by_name = load_growth_policy(report_name, candidate_report)
-    metric_diagnostics_by_name: dict[str, dict[str, int]] = {}
+    metric_diagnostics_by_name: dict[str, dict[str, int | float]] = {}
     for metric_name, base_metric_by_name in reference_report["metrics"].items():
         current_metric_by_name = current_snapshot.metric_by_name[metric_name]
         metric_diagnostics_by_name[metric_name] = _metric_diagnostics(
             current_metric_by_name,
             base_metric_by_name,
-            growth_policy_by_name["target_percent_by_metric"][metric_name],
-            growth_policy_by_name,
-            changed_by_report[report_name],
         )
     return {
         "schema_version": 1,
@@ -138,7 +113,8 @@ def build_forecast_diagnostics(
         "head_sha": head_sha,
         "reports": {
             report_name: {
-                "changed_source_lines": changed_by_report[report_name],
+                "changed_source_lines": diff_by_report[report_name]["changed"],
+                "diff_coverage": diff_by_report[report_name],
                 "exclusion_errors": exclusion_errors,
                 "metrics": metric_diagnostics_by_name,
                 "missing_branch_arcs": _missing_branch_arcs(

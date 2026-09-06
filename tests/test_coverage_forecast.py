@@ -45,9 +45,8 @@ def _baseline(report_path: Path) -> dict:
                     "lines": {"covered": 8, "total": 10},
                 },
                 "growth": {
-                    "changed_line_divisor": 10,
-                    "debt_reduction_percent": 1,
-                    "target_percent_by_metric": {"branches": 90, "lines": 95},
+                    "debt_reduction_percent": 0,
+                    "diff_coverage_percent": 85,
                 },
             }
         },
@@ -58,7 +57,7 @@ def _write_report(
     root: Path,
     covered_count: int = 8,
     total_count: int = 10,
-    branch_total: int = 7,
+    branch_total: int = 10,
 ) -> Path:
     source_path = root / "pkg" / "sample.py"
     source_path.parent.mkdir()
@@ -69,6 +68,8 @@ def _write_report(
             {
                 "files": {
                     str(source_path): {
+                        "executed_lines": list(range(1, covered_count + 1)),
+                        "missing_lines": list(range(covered_count + 1, total_count + 1)),
                         "summary": {
                             "covered_lines": covered_count,
                             "num_statements": total_count,
@@ -86,7 +87,7 @@ def _write_report(
 
 
 def _growth_baseline(report_path: Path) -> dict:
-    """Return one static baseline that requires a one-unit debt payment."""
+    """Return a static 80-percent reference floor."""
 
     baseline_by_name = _baseline(report_path)
     baseline_by_name["reports"]["python"]["metrics"] = {
@@ -109,7 +110,6 @@ def _staged_ratchet_result(
     errors = coverage_ratchet._compare_baselines(
         candidate_baseline,
         reference_baseline,
-        {"python": 17},
     )
     errors.extend(
         coverage_ratchet._check_current_report(
@@ -131,6 +131,7 @@ def _run_growth_forecast(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     covered_count: int,
+    baseline_output_path: Path | None = None,
 ) -> tuple[int, dict]:
     """Run forecast staging with the same report-driven gate used in CI."""
 
@@ -141,6 +142,8 @@ def _run_growth_forecast(
         branch_total=100,
     )
     candidate_baseline = _growth_baseline(report_path)
+    for metric_by_name in candidate_baseline["reports"]["python"]["metrics"].values():
+        metric_by_name["covered"] = 70
     reference_baseline = _growth_baseline(report_path)
     output_path = tmp_path / "forecast.json"
     monkeypatch.setattr(
@@ -166,8 +169,10 @@ def _run_growth_forecast(
     monkeypatch.setattr(coverage_forecast, "_run_ratchet", _staged_ratchet_result)
     monkeypatch.setattr(
         coverage_forecast_reporting,
-        "collect_growth_evidence",
-        lambda *_arguments: ({"python": 17}, []),
+        "collect_diff_coverage",
+        lambda *_arguments: (
+            {"python": {"changed": 17, "covered": 17, "total": 17, "threshold": 85}}, []
+        ),
     )
 
     exit_code = coverage_forecast.run_forecast(
@@ -176,6 +181,7 @@ def _run_growth_forecast(
         report_path,
         tmp_path / "coverage-provenance.json",
         output_path,
+        baseline_output_path=baseline_output_path,
     )
     return exit_code, json.loads(output_path.read_text(encoding="utf-8"))
 
@@ -265,7 +271,7 @@ def test_forecast_stages_report_metrics_for_the_real_ratchet(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A static baseline cannot make a report under the cap fail the forecast."""
+    """Stale tracked counts cannot reject genuinely improved measured coverage."""
 
     exit_code, forecast_by_name = _run_growth_forecast(
         tmp_path,
@@ -278,8 +284,7 @@ def test_forecast_stages_report_metrics_for_the_real_ratchet(
     assert forecast_by_name["ratchet_errors"] == []
     for metric_by_name in forecast_by_name["reports"]["python"]["metrics"].values():
         assert metric_by_name["current_missing"] == 19
-        assert metric_by_name["effective_missing_cap"] == 19
-        assert metric_by_name["margin"] == 0
+        assert metric_by_name["ratio_delta"] == 1
 
 
 def test_forecast_stages_report_files_without_changing_reference_policy(
@@ -297,6 +302,8 @@ def test_forecast_stages_report_files_without_changing_reference_policy(
     extra_source_path.write_text("extra = True\n", encoding="utf-8")
     report_by_name = json.loads(report_path.read_text(encoding="utf-8"))
     report_by_name["files"][str(extra_source_path)] = {
+        "executed_lines": [1, 2],
+        "missing_lines": [],
         "summary": {
             "covered_lines": 2,
             "num_statements": 2,
@@ -333,28 +340,51 @@ def test_forecast_stages_report_files_without_changing_reference_policy(
     assert reference_report["scope"] == reference_baseline["reports"]["python"]["scope"]
 
 
-def test_forecast_keeps_the_ratchet_red_when_report_debt_misses_the_cap(
+def test_forecast_keeps_the_ratchet_red_when_report_ratio_regresses(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Report-derived staging does not weaken a genuine debt-paydown failure."""
+    """Report-derived staging still rejects a genuine ratio regression."""
 
     exit_code, forecast_by_name = _run_growth_forecast(
         tmp_path,
         monkeypatch,
-        covered_count=80,
+        covered_count=79,
     )
 
     assert exit_code == 1
     assert forecast_by_name["ratchet_exit_code"] == 1
     assert any(
-        "uncovered debt must fall by 1 to 19 or less" in error
+        "coverage fell" in error
         for error in forecast_by_name["ratchet_errors"]
     )
     for metric_by_name in forecast_by_name["reports"]["python"]["metrics"].values():
-        assert metric_by_name["current_missing"] == 20
-        assert metric_by_name["effective_missing_cap"] == 19
-        assert metric_by_name["margin"] == -1
+        assert metric_by_name["current_missing"] == 21
+        assert metric_by_name["ratio_delta"] == -1
+
+
+@pytest.mark.parametrize("covered_count", [79, 81])
+def test_forecast_publishes_machine_evidence_only_after_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    covered_count: int,
+):
+    docs_path = tmp_path / "docs"
+    docs_path.mkdir()
+    (docs_path / "test-coverage.md").write_text(
+        "<!-- coverage-baseline:start -->\n<!-- coverage-baseline:end -->\n",
+        encoding="utf-8",
+    )
+    baseline_output = tmp_path / "artifacts" / "test-coverage-baseline.json"
+    exit_code, _diagnostics = _run_growth_forecast(
+        tmp_path, monkeypatch, covered_count, baseline_output,
+    )
+    assert baseline_output.exists() is (exit_code == 0)
+    assert baseline_output.with_name("test-coverage.md").exists() is (exit_code == 0)
+    if exit_code == 0:
+        measured_baseline = json.loads(baseline_output.read_text(encoding="utf-8"))
+        assert measured_baseline["source_sha"] == HEAD_SHA
+        assert measured_baseline["reports"]["python"]["metrics"]["lines"]["covered"] == covered_count
 
 
 def test_forecast_error_writes_an_always_uploaded_artifact(tmp_path: Path):

@@ -1,4 +1,5 @@
 {
+  "machine_artifact_required": true,
   "reports": {
     "python": {
       "files": [
@@ -35,12 +36,8 @@
       ],
       "format": "coverage.py",
       "growth": {
-        "changed_line_divisor": 10,
-        "debt_reduction_percent": 1,
-        "target_percent_by_metric": {
-          "branches": 90,
-          "lines": 95
-        }
+        "debt_reduction_percent": 0,
+        "diff_coverage_percent": 85
       },
       "metrics": {
         "branches": {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -36,7 +37,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _metric(covered: Any, total: Any, label: str) -> Metric:
-    if not isinstance(covered, int) or not isinstance(total, int):
+    if type(covered) is not int or type(total) is not int:
         raise CoverageRatchetError(f"{label} counts must be integers")
     if total <= 0 or covered < 0 or covered > total:
         raise CoverageRatchetError(
@@ -75,7 +76,11 @@ def _is_path_in_scope(relative_path: str, config: dict[str, Any]) -> bool:
 
 
 def _relative_report_path(root: Path, raw_path: str) -> str | None:
+    if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+        raise CoverageRatchetError("coverage source path is malformed")
     candidate = Path(raw_path)
+    if ".." in candidate.parts:
+        raise CoverageRatchetError("coverage source path escapes its root")
     if candidate.is_absolute():
         try:
             candidate = candidate.resolve().relative_to(root.resolve())
@@ -98,6 +103,12 @@ def _discover_scope_files(root: Path, config: dict[str, Any]) -> frozenset[str]:
     return frozenset(files)
 
 
+def _validate_counts(summary: dict[str, Any], covered_key: str, total_key: str, label: str) -> None:
+    covered, total = summary.get(covered_key), summary.get(total_key)
+    if type(covered) is not int or type(total) is not int or total < 0 or not 0 <= covered <= total:
+        raise CoverageRatchetError(f"{label}: coverage summary counts are malformed")
+
+
 def _coveragepy_snapshot(
     report_document: dict[str, Any],
     root: Path,
@@ -114,10 +125,15 @@ def _coveragepy_snapshot(
         if relative_path is None:
             continue
         file_summary = file_payload.get("summary")
-        if _is_path_in_scope(relative_path, config) and isinstance(
-            file_summary, dict
-        ):
-            summary_by_file[relative_path] = file_summary
+        if not _is_path_in_scope(relative_path, config):
+            continue
+        if relative_path in summary_by_file:
+            raise CoverageRatchetError(f"duplicate coverage.py file: {relative_path}")
+        if not isinstance(file_summary, dict):
+            raise CoverageRatchetError(f"{relative_path}: coverage.py summary is malformed")
+        _validate_counts(file_summary, "covered_lines", "num_statements", relative_path)
+        _validate_counts(file_summary, "covered_branches", "num_branches", relative_path)
+        summary_by_file[relative_path] = file_summary
     if not summary_by_file:
         raise CoverageRatchetError("coverage.py report contains no in-scope files")
     metric_by_name = {
@@ -292,3 +308,91 @@ def _collect_report(
                 + ", ".join(missing_files)
             )
     return snapshot
+
+
+_DOCS_START = "<!-- coverage-baseline:start -->"
+_DOCS_END = "<!-- coverage-baseline:end -->"
+
+
+def _baseline_docs(baseline: dict[str, Any]) -> str:
+    """Render the tracked current-baseline table deterministically."""
+
+    reports_by_name = baseline.get("reports")
+    if not isinstance(reports_by_name, dict) or not reports_by_name:
+        raise CoverageRatchetError("coverage baseline has no reports")
+    lines = [_DOCS_START]
+    for report_name, config in reports_by_name.items():
+        if not isinstance(config, dict):
+            raise CoverageRatchetError(f"{report_name}: baseline report is malformed")
+        metrics_by_name = config.get("metrics")
+        if not isinstance(metrics_by_name, dict) or not metrics_by_name:
+            raise CoverageRatchetError(f"{report_name}: baseline metrics are missing")
+        if len(reports_by_name) > 1:
+            lines.extend((f"### {report_name.replace('_', ' ').title()}", ""))
+        lines.extend(("| Metric | Covered / total | Coverage |", "| --- | ---: | ---: |"))
+        for metric_name, raw_metric in metrics_by_name.items():
+            if not isinstance(raw_metric, dict):
+                raise CoverageRatchetError(
+                    f"{report_name}.{metric_name}: baseline metric is malformed"
+                )
+            metric = _metric(
+                raw_metric.get("covered"),
+                raw_metric.get("total"),
+                f"{report_name}.{metric_name}",
+            )
+            lines.append(
+                f"| {metric_name.replace('_', ' ').title()} | "
+                f"{metric['covered']:,} / {metric['total']:,} | "
+                f"{100 * metric['covered'] / metric['total']:.2f}% |"
+            )
+        lines.append("")
+    lines.append(_DOCS_END)
+    return "\n".join(lines)
+
+
+def _updated_docs(document: str, baseline: dict[str, Any]) -> str:
+    if document.count(_DOCS_START) != 1 or document.count(_DOCS_END) != 1:
+        raise CoverageRatchetError("coverage docs must contain one generated table marker pair")
+    if document.index(_DOCS_START) > document.index(_DOCS_END):
+        raise CoverageRatchetError("coverage docs generated table markers are out of order")
+    prefix, remainder = document.split(_DOCS_START, 1)
+    _, suffix = remainder.split(_DOCS_END, 1)
+    return prefix + _baseline_docs(baseline) + suffix
+
+
+def check_baseline_docs(path: Path, baseline: dict[str, Any]) -> None:
+    """Fail when the generated documentation table differs from a baseline."""
+
+    current = path.read_text(encoding="utf-8")
+    if current != _updated_docs(current, baseline):
+        raise CoverageRatchetError(
+            f"{path} current-baseline table is stale; run coverage_reports.py --write-docs"
+        )
+
+
+def _run_docs_cli() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--baseline", type=Path, default=Path("test-coverage-baseline.json"))
+    parser.add_argument("--docs", type=Path, default=Path("docs/test-coverage.md"))
+    parser.add_argument("--write-docs", action="store_true")
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+    if not args.write_docs and not args.check:
+        parser.error("one of --write-docs or --check is required")
+    try:
+        baseline = _read_json(args.baseline)
+        if args.write_docs:
+            current = args.docs.read_text(encoding="utf-8")
+            args.docs.write_text(_updated_docs(current, baseline), encoding="utf-8")
+            print(f"Wrote the coverage baseline table to {args.docs}.")
+        if args.check:
+            check_baseline_docs(args.docs, baseline)
+            print("Coverage documentation matches the baseline.")
+    except (CoverageRatchetError, FileNotFoundError) as exc:
+        print(f"ERROR: {exc}")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_docs_cli())
