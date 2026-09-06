@@ -232,7 +232,7 @@ def _write_measured_baseline(
     _write_json(output, baseline_by_name)
     docs_text = (root / "docs/test-coverage.md").read_text(encoding="utf-8")
     output.with_name("test-coverage.md").write_text(
-        _updated_docs(docs_text, baseline_by_name), encoding="utf-8"
+        _updated_docs(docs_text, _load_baseline(output)), encoding="utf-8"
     )
 
 

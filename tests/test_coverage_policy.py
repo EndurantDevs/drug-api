@@ -118,12 +118,16 @@ def test_machine_snapshot_has_matching_generated_docs(tmp_path):
     configured = ratchet._load_baseline(ROOT / "test-coverage-baseline.json")
     measured = copy.deepcopy(configured)
     measured["reports"]["python"]["path"] = "/temporary/report.json"
-    measured["reports"]["python"]["metrics"]["lines"]["covered"] += 1
+    measured["reports"]["python"]["metrics"] = {
+        "lines": {"covered": 17, "total": 20},
+        "branches": {"covered": 3, "total": 5},
+    }
     output = tmp_path / "machine.json"
     forecast._write_measured_baseline(ROOT, output, measured, configured, "a" * 40)
     artifact = json.loads(output.read_text())
     assert artifact["source_sha"] == "a" * 40
     assert artifact["reports"]["python"]["path"] == configured["reports"]["python"]["path"]
+    assert artifact["reports"]["python"]["metrics"] == measured["reports"]["python"]["metrics"]
     reports.check_baseline_docs(tmp_path / "test-coverage.md", artifact)
     reports.check_baseline_docs(ROOT / "docs/test-coverage.md", configured)
 
