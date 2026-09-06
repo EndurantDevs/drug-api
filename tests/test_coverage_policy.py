@@ -4,12 +4,10 @@ import argparse
 import copy
 import importlib
 import json
-import runpy
 import subprocess
 import sys
 from pathlib import Path
 
-import coverage
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -110,13 +108,11 @@ def test_real_coverage_excluded_execution_is_not_a_statement(tmp_path):
     sample = tmp_path / "sample.py"
     sample.write_text("TYPE_CHECKING = True\nif TYPE_CHECKING:\n    excluded = 1\ncovered = 2\n")
     report_path = tmp_path / "coverage.json"
-    measured = coverage.Coverage(data_file=None, config_file=False)
-    measured.start()
-    try:
-        runpy.run_path(str(sample))
-    finally:
-        measured.stop()
-    measured.json_report(morfs=[str(sample)], outfile=str(report_path))
+    data_path = tmp_path / ".coverage"
+    subprocess.run([sys.executable, "-m", "coverage", "run", "--rcfile=/dev/null",
+                    "--data-file", str(data_path), str(sample)], cwd=tmp_path, check=True)
+    subprocess.run([sys.executable, "-m", "coverage", "json", "--rcfile=/dev/null",
+                    "--data-file", str(data_path), "-o", str(report_path)], cwd=tmp_path, check=True)
     payload = next(iter(json.loads(report_path.read_text())["files"].values()))
     assert payload["excluded_lines"] == [2, 3]
     assert growth._coveragepy_line_sets(payload, "sample.py") == ({1, 4}, {1, 4})
