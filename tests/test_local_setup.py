@@ -10,12 +10,12 @@ from dotenv import dotenv_values
 
 def test_example_environment_loads_cli():
     root = Path(__file__).resolve().parents[1]
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("HLTHPRT_")}
-    environment.update(dotenv_values(root / ".env.example"))
+    environment_by_name = {key: value for key, value in os.environ.items() if not key.startswith("HLTHPRT_")}
+    environment_by_name.update(dotenv_values(root / ".env.example"))
     result = subprocess.run(
         [sys.executable, "main.py", "--help"],
         cwd=root,
-        env=environment,
+        env=environment_by_name,
         capture_output=True,
         text=True,
         timeout=30,
