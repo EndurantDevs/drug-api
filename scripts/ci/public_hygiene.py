@@ -2,7 +2,7 @@
 """Public repository hygiene checks.
 
 The default check is intentionally based on tracked files only so CI is
-deterministic. The pre-push entry point also scans untracked candidate files.
+deterministic. The --include-untracked option also scans untracked candidate files.
 """
 
 from __future__ import annotations
