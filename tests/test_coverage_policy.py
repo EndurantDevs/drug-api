@@ -120,6 +120,9 @@ def test_real_coverage_excluded_execution_is_not_a_statement(tmp_path):
     payload = next(iter(json.loads(report_path.read_text())["files"].values()))
     assert payload["excluded_lines"] == [2, 3]
     assert growth._coveragepy_line_sets(payload, "sample.py") == ({1, 4}, {1, 4})
+    # Older Coverage.py tracers also record execution of the excluded block.
+    payload["executed_lines"] = [1, 2, 3, 4]
+    assert growth._coveragepy_line_sets(payload, "sample.py") == ({1, 4}, {1, 4})
     config = growth.build_diff_policy_test_baseline()["reports"]["python"]
     result = growth._report_diff_coverage(tmp_path, "python", config, {"sample.py": {3}})
     assert (result["covered"], result["total"]) == (0, 0)
