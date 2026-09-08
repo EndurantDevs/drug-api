@@ -35,6 +35,7 @@ def test_public_ci_is_hosted_read_only_and_runs_import_checks():
     assert workflow.get("on", workflow.get(True))["pull_request"] == {
         "types": ["opened", "synchronize", "reopened", "edited"]
     }
+    assert workflow.get("on", workflow.get(True))["push"] == {"branches": ["main", "dev"]}
     assert workflow["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
     assert set(workflow["jobs"]) == {"smoke", "validate", "publish"}
     job = workflow["jobs"]["smoke"]

@@ -168,5 +168,6 @@ jobs:
   push:
     branches:
     - main
+    - dev
 run-name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
   && 'CI metadata update' || 'CI' }}
