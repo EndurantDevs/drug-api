@@ -2,6 +2,7 @@ name: CI
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -36,3 +37,12 @@ jobs:
         run: >-
           python -m pytest -q
           tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py tests/api/test_healthcheck.py tests/test_local_setup.py tests/test_public_ci.py
+  source-validation:
+    name: Source validation
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    uses: EndurantDevs/endurant-ci/.github/workflows/drug.yml@df40c093b47ab0c7eaa6d83e3b95142bc22500cc
+    with:
+      ci_revision: df40c093b47ab0c7eaa6d83e3b95142bc22500cc
