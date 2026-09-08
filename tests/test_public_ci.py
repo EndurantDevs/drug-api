@@ -76,8 +76,12 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
     assert set(revision) != {"0"}
     for job_id, job in workflow["jobs"].items():
         label = labels_by_job[job_id]
-        assert job["name"] == "${{ " + metadata_only + f" && '{label} (metadata only)' || '{label}' " + "}}"
-        assert job["if"] == "${{ !(" + metadata_only + ") && (success()) }}"
+        if job_id == "smoke":
+            assert job["name"] == label
+            assert job["if"] == "${{ success() }}"
+        else:
+            assert job["name"] == "${{ " + metadata_only + f" && '{label} (metadata only)' || '{label}' " + "}}"
+            assert job["if"] == "${{ !(" + metadata_only + ") && (success()) }}"
         assert "uses" not in job
         assert job["runs-on"] == "ubuntu-latest"
         assert not job.get("continue-on-error")

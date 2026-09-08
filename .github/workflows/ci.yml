@@ -11,8 +11,7 @@ concurrency:
     && !github.event.changes.base) && github.ref != 'refs/heads/main' }}
 jobs:
   smoke:
-    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
-      && 'portable import checks (metadata only)' || 'portable import checks' }}
+    name: portable import checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -35,8 +34,7 @@ jobs:
     - name: Run synthetic import and API checks
       run: python -m pytest -q tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py tests/api/test_healthcheck.py
         tests/test_local_setup.py tests/test_public_ci.py
-    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
-      && (success()) }}
+    if: ${{ success() }}
   validate:
     name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
       && 'Tests and build (metadata only)' || 'Tests and build' }}
@@ -45,7 +43,7 @@ jobs:
     outputs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
     env:
-      CI_REVISION: 8634e3a123b973a2567bf4be58e4d705491da4cb
+      CI_REVISION: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -53,7 +51,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 8634e3a123b973a2567bf4be58e4d705491da4cb
+        ref: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -107,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: 8634e3a123b973a2567bf4be58e4d705491da4cb
+      CI_REVISION: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -115,7 +113,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 8634e3a123b973a2567bf4be58e4d705491da4cb
+        ref: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
