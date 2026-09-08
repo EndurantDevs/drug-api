@@ -1,48 +1,174 @@
+# Generated from the pinned Endurance CI workflow; refresh with scripts/render_workflow.py.
 name: CI
-
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, edited]
-  push:
-    branches: [main]
-
 permissions:
   contents: read
-
+  pull-requests: read
+  actions: read
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
-
+  group: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
+    && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title
+    && !github.event.changes.base) && github.ref != 'refs/heads/main' }}
 jobs:
   smoke:
-    name: portable import checks
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
+      && 'portable import checks (metadata only)' || 'portable import checks' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        with:
-          python-version: "3.13.15"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-dev.txt
-      - name: Check public repository hygiene
-        run: python scripts/ci/public_hygiene.py
-      - name: Install runtime and test dependencies
-        run: python -m pip install -r requirements.txt -c requirements-dev.txt pytest pytest-asyncio
-      - name: Run synthetic import and API checks
-        run: >-
-          python -m pytest -q
-          tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py tests/api/test_healthcheck.py tests/test_local_setup.py tests/test_public_ci.py
-  source-validation:
-    name: Source validation
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read
-    uses: EndurantDevs/endurant-ci/.github/workflows/drug.yml@df40c093b47ab0c7eaa6d83e3b95142bc22500cc
-    with:
-      ci_revision: df40c093b47ab0c7eaa6d83e3b95142bc22500cc
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: 3.13.15
+        cache: pip
+        cache-dependency-path: 'requirements.txt
+
+          requirements-dev.txt
+
+          '
+    - name: Check public repository hygiene
+      run: python scripts/ci/public_hygiene.py
+    - name: Install runtime and test dependencies
+      run: python -m pip install -r requirements.txt -c requirements-dev.txt pytest pytest-asyncio
+    - name: Run synthetic import and API checks
+      run: python -m pytest -q tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py tests/api/test_healthcheck.py
+        tests/test_local_setup.py tests/test_public_ci.py
+    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+      && (success()) }}
+  validate:
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
+      && 'Tests and build (metadata only)' || 'Tests and build' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
+    env:
+      CI_REVISION: 8634e3a123b973a2567bf4be58e4d705491da4cb
+      CI_ROOT: ${{ github.workspace }}/ci
+      SOURCE_ROOT: ${{ github.workspace }}/source
+    steps:
+    - name: Check out pinned public validation
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: EndurantDevs/endurant-ci
+        ref: 8634e3a123b973a2567bf4be58e4d705491da4cb
+        path: ci
+        persist-credentials: false
+    - name: Resolve exact public source event
+      id: source
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 ci/scripts/source_identity.py
+    - name: Check out exact public source
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: EndurantDevs/drug-api
+        ref: ${{ env.SOURCE_SHA }}
+        path: source
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Verify checkout identities
+      run: 'test "$SOURCE_REPOSITORY" = EndurantDevs/drug-api
+
+        test "$(git -C "$CI_ROOT" rev-parse HEAD)" = "$CI_REVISION"
+
+        test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_SHA"
+
+        git -C "$SOURCE_ROOT" merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        '
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: 3.13.15
+    - name: Run complete public source validation
+      env:
+        PUBLIC_CI_ARTIFACT_ROOT: ${{ runner.temp }}/drug-public-measurement
+      run: bash "$CI_ROOT/scripts/drug/check" measure
+    - name: Upload public coverage staging data
+      id: staging
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: drug-public-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        path: 'source/test-coverage-python.json
+
+          source/coverage-provenance.json
+
+          '
+        if-no-files-found: error
+        retention-days: 1
+    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+      && (success()) }}
+  publish:
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
+      && 'Coverage results (metadata only)' || 'Coverage results' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CI_REVISION: 8634e3a123b973a2567bf4be58e4d705491da4cb
+      CI_ROOT: ${{ github.workspace }}/ci
+      SOURCE_ROOT: ${{ github.workspace }}/source
+    steps:
+    - name: Check out pinned public validation
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: EndurantDevs/endurant-ci
+        ref: 8634e3a123b973a2567bf4be58e4d705491da4cb
+        path: ci
+        persist-credentials: false
+    - name: Resolve exact public source event
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 ci/scripts/source_identity.py
+    - name: Check out source file inventory
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: EndurantDevs/drug-api
+        ref: ${{ env.SOURCE_SHA }}
+        path: source
+        persist-credentials: false
+    - name: Download exact completed validation data
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        artifact-ids: ${{ needs.validate.outputs.staging_artifact_id }}
+        path: ${{ runner.temp }}/drug-staging
+        merge-multiple: true
+    - name: Validate and package public measurement
+      run: 'test "$SOURCE_REPOSITORY" = EndurantDevs/drug-api
+
+        test "$(git -C "$CI_ROOT" rev-parse HEAD)" = "$CI_REVISION"
+
+        test "$(git -C "$SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_SHA"
+
+        python3 ci/scripts/drug/measurement.py "$RUNNER_TEMP/drug-staging" "$RUNNER_TEMP/drug-public-measurement"
+
+        '
+    - name: Upload public measurement
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: drug-public-measurement-${{ github.run_id }}-${{ github.run_attempt }}
+        path: '${{ runner.temp }}/drug-public-measurement/test-coverage-python.json
+
+          ${{ runner.temp }}/drug-public-measurement/coverage-provenance.json
+
+          ${{ runner.temp }}/drug-public-measurement/measurement.json
+
+          '
+        if-no-files-found: error
+        retention-days: 90
+    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+      && (success()) }}
+'on':
+  pull_request:
+    types:
+    - opened
+    - synchronize
+    - reopened
+    - edited
+  push:
+    branches:
+    - main
+run-name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
+  && 'CI metadata update' || 'CI' }}

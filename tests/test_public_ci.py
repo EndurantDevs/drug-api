@@ -6,6 +6,26 @@ from pathlib import Path
 import yaml
 
 
+def _assert_job_actions(job_id, job, revision) -> None:
+    """Require pinned read-only actions and the approved validation package."""
+    has_pinned_checkout = False
+    for step in job["steps"]:
+        assert not step.get("continue-on-error")
+        action = step.get("uses")
+        if not action:
+            continue
+        assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action)
+        if not action.startswith("actions/checkout@"):
+            continue
+        assert step["with"]["persist-credentials"] is False
+        if step["with"].get("repository") != "EndurantDevs/endurant-ci":
+            continue
+        assert step["with"]["ref"] == revision
+        assert step["with"]["path"] == "ci"
+        has_pinned_checkout = True
+    assert has_pinned_checkout or job_id == "smoke"
+
+
 def test_public_ci_is_hosted_read_only_and_runs_import_checks():
     workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
     assert sorted(path.name for path in workflows.iterdir()) == ["ci.yml"]
@@ -15,11 +35,12 @@ def test_public_ci_is_hosted_read_only_and_runs_import_checks():
     assert workflow.get("on", workflow.get(True))["pull_request"] == {
         "types": ["opened", "synchronize", "reopened", "edited"]
     }
-    assert workflow["permissions"] == {"contents": "read"}
-    assert set(workflow["jobs"]) == {"smoke", "source-validation"}
+    assert workflow["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
+    assert set(workflow["jobs"]) == {"smoke", "validate", "publish"}
     job = workflow["jobs"]["smoke"]
     assert job["runs-on"] == "ubuntu-latest"
-    assert "container" not in job and "services" not in job
+    assert "container" not in job
+    assert "services" not in job
     assert not job.get("continue-on-error")
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert "scripts/ci/public_hygiene.py" in commands
@@ -34,13 +55,34 @@ def test_public_ci_is_hosted_read_only_and_runs_import_checks():
                 assert step["with"]["persist-credentials"] is False
 
 
-def test_shared_validation_is_pinned_read_only_and_has_no_caller_overrides():
+def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
     workflow_path = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
-    job = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))["jobs"]["source-validation"]
-    assert set(job) == {"name", "permissions", "uses", "with"}
-    assert job["name"] == "Source validation"
-    assert job["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
-    assert re.fullmatch(
-        r"EndurantDevs/endurant-ci/\.github/workflows/drug\.yml@[0-9a-f]{40}", job["uses"]
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    metadata_only = (
+        "github.event_name == 'pull_request' && github.event.action == 'edited' "
+        "&& !github.event.changes.title && !github.event.changes.base"
     )
-    assert job["with"] == {"ci_revision": job["uses"].rsplit("@", 1)[1]}
+    assert workflow["run-name"] == "${{ " + metadata_only + " && 'CI metadata update' || 'CI' }}"
+    assert workflow["concurrency"] == {
+        "group": (
+            "${{ " + metadata_only
+            + " && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.ref) }}"
+        ),
+        "cancel-in-progress": "${{ !(" + metadata_only + ") && github.ref != 'refs/heads/main' }}",
+    }
+    labels_by_job = {"smoke": "portable import checks", "validate": "Tests and build", "publish": "Coverage results"}
+    revision = workflow["jobs"]["validate"]["env"]["CI_REVISION"]
+    assert re.fullmatch(r"[0-9a-f]{40}", revision)
+    assert set(revision) != {"0"}
+    for job_id, job in workflow["jobs"].items():
+        label = labels_by_job[job_id]
+        assert job["name"] == "${{ " + metadata_only + f" && '{label} (metadata only)' || '{label}' " + "}}"
+        assert job["if"] == "${{ !(" + metadata_only + ") && (success()) }}"
+        assert "uses" not in job
+        assert job["runs-on"] == "ubuntu-latest"
+        assert not job.get("continue-on-error")
+        assert all(permission in {"read", "none"} for permission in job.get("permissions", {}).values())
+        _assert_job_actions(job_id, job, revision)
+        if job_id != "smoke":
+            assert job["env"]["CI_REVISION"] == revision
+    assert workflow["jobs"]["publish"]["needs"] == "validate"
