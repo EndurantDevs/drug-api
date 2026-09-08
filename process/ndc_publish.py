@@ -4,24 +4,23 @@ from typing import Any
 
 
 async def publish_ndc_tables(database: Any, db_schema: str, import_date: str) -> None:
-    """Create indexes and swap staged product/package tables into service."""
+    """Build staged indexes before touching either live table, then publish atomically."""
     await database.status("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
     await database.status("CREATE EXTENSION IF NOT EXISTS btree_gin;")
-    for table in ['product', 'package']:
-        async with database.transaction():
+    async with database.transaction():
+        for table in ['product', 'package']:
+            print(f'Creating indexes for {table} ...')
+            await database.status(
+                f"CREATE INDEX {table}_idx_product_ndc_{import_date} ON "
+                f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
+            if table == 'product':
+                await _create_product_indexes(database, db_schema, import_date)
+        for table in ['product', 'package']:
             await _publish_single_ndc_table(database, db_schema, table, import_date)
 
 
 async def _publish_single_ndc_table(database: Any, db_schema: str, table: str, import_date: str) -> None:
-    print(f'Creating indexes for {table} ...')
-    await database.status(
-        f"CREATE INDEX {table}_idx_product_ndc_{import_date} ON "
-        f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
-
     await database.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
-
-    if table == 'product':
-        await _create_product_indexes(database, db_schema, import_date)
 
     await database.status(f"ALTER INDEX IF EXISTS "
                           f"{db_schema}.{table}_idx_product_ndc RENAME TO "
