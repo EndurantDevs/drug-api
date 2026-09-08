@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 
-def _assert_job_actions(job_id, job, revision):
+def _assert_job_actions(job_id, job, revision) -> None:
     """Require pinned read-only actions and the approved validation package."""
     has_pinned_checkout = False
     for step in job["steps"]:
@@ -64,7 +64,10 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
     )
     assert workflow["run-name"] == "${{ " + metadata_only + " && 'CI metadata update' || 'CI' }}"
     assert workflow["concurrency"] == {
-        "group": "${{ " + metadata_only + " && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.ref) }}",
+        "group": (
+            "${{ " + metadata_only
+            + " && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.ref) }}"
+        ),
         "cancel-in-progress": "${{ !(" + metadata_only + ") && github.ref != 'refs/heads/main' }}",
     }
     labels_by_job = {"smoke": "portable import checks", "validate": "Tests and build", "publish": "Coverage results"}
