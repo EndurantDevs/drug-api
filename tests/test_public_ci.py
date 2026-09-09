@@ -37,7 +37,9 @@ def test_public_ci_is_hosted_with_bounded_permissions_and_runs_import_checks():
     }
     assert workflow.get("on", workflow.get(True))["push"] == {"branches": ["main", "dev"]}
     assert workflow["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
-    assert set(workflow["jobs"]) == {"smoke", "validate", "publish", "artifact-cleanup"}
+    assert set(workflow["jobs"]) == {
+        "smoke", "validate", "publish", "dev-image-publication", "artifact-cleanup",
+    }
     job = workflow["jobs"]["smoke"]
     assert job["runs-on"] == "ubuntu-latest"
     assert "container" not in job
@@ -75,12 +77,14 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
     assert workflow["concurrency"] == {
         "group": (
             "${{ " + metadata_only
-            + " && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.ref) }}"
+            + " && format('ci-metadata-{0}', github.run_id) || github.event_name == 'push' "
+            + "&& format('ci-push-{0}', github.run_id) || format('ci-{0}', github.ref) }}"
         ),
-        "cancel-in-progress": "${{ !(" + metadata_only + ") && github.ref != 'refs/heads/main' }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' && !(" + metadata_only + ") }}",
     }
     labels_by_job = {"smoke": "portable import checks", "validate": "Tests and build",
-                     "publish": "Coverage results", "artifact-cleanup": "CI artifact cleanup"}
+                     "publish": "Coverage results", "dev-image-publication": "DEV image publication",
+                     "artifact-cleanup": "CI artifact cleanup"}
     revision = workflow["jobs"]["validate"]["env"]["CI_REVISION"]
     assert re.fullmatch(r"[0-9a-f]{40}", revision)
     assert set(revision) != {"0"}
@@ -95,7 +99,11 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
         assert "uses" not in job
         assert job["runs-on"] == "ubuntu-latest"
         assert not job.get("continue-on-error")
-        if job_id == "artifact-cleanup":
+        if job_id == "dev-image-publication":
+            assert job["permissions"] == {
+                "contents": "read", "pull-requests": "read", "actions": "read", "packages": "write",
+            }
+        elif job_id == "artifact-cleanup":
             assert job["permissions"] == {"contents": "read", "actions": "write"}
         else:
             assert all(permission in {"read", "none"} for permission in job.get("permissions", {}).values())
@@ -103,8 +111,9 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
         if job_id not in {"smoke", "artifact-cleanup"}:
             assert job["env"]["CI_REVISION"] == revision
     assert workflow["jobs"]["publish"]["needs"] == "validate"
+    assert workflow["jobs"]["dev-image-publication"]["needs"] == ["smoke", "publish"]
     cleanup = workflow["jobs"]["artifact-cleanup"]
-    assert cleanup["needs"] == ["smoke", "publish"]
+    assert cleanup["needs"] == ["dev-image-publication"]
     assert cleanup["timeout-minutes"] == 10
     assert cleanup["steps"] == [
         {"name": "Check out trusted cleanup helper",
