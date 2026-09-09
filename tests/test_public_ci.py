@@ -7,7 +7,7 @@ import yaml
 
 
 def _assert_job_actions(job_id, job, revision) -> None:
-    """Require pinned read-only actions and the approved validation package."""
+    """Require pinned actions and the approved validation package."""
     has_pinned_checkout = False
     for step in job["steps"]:
         assert not step.get("continue-on-error")
@@ -26,7 +26,7 @@ def _assert_job_actions(job_id, job, revision) -> None:
     assert has_pinned_checkout or job_id == "smoke"
 
 
-def test_public_ci_is_hosted_read_only_and_runs_import_checks():
+def test_public_ci_is_hosted_with_bounded_permissions_and_runs_import_checks():
     workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
     assert sorted(path.name for path in workflows.iterdir()) == ["ci.yml"]
     text = (workflows / "ci.yml").read_text(encoding="utf-8")
@@ -37,7 +37,7 @@ def test_public_ci_is_hosted_read_only_and_runs_import_checks():
     }
     assert workflow.get("on", workflow.get(True))["push"] == {"branches": ["main", "dev"]}
     assert workflow["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
-    assert set(workflow["jobs"]) == {"smoke", "validate", "publish"}
+    assert set(workflow["jobs"]) == {"smoke", "validate", "publish", "artifact-cleanup"}
     job = workflow["jobs"]["smoke"]
     assert job["runs-on"] == "ubuntu-latest"
     assert "container" not in job
@@ -71,7 +71,8 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
         ),
         "cancel-in-progress": "${{ !(" + metadata_only + ") && github.ref != 'refs/heads/main' }}",
     }
-    labels_by_job = {"smoke": "portable import checks", "validate": "Tests and build", "publish": "Coverage results"}
+    labels_by_job = {"smoke": "portable import checks", "validate": "Tests and build",
+                     "publish": "Coverage results", "artifact-cleanup": "CI artifact cleanup"}
     revision = workflow["jobs"]["validate"]["env"]["CI_REVISION"]
     assert re.fullmatch(r"[0-9a-f]{40}", revision)
     assert set(revision) != {"0"}
@@ -86,8 +87,23 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
         assert "uses" not in job
         assert job["runs-on"] == "ubuntu-latest"
         assert not job.get("continue-on-error")
-        assert all(permission in {"read", "none"} for permission in job.get("permissions", {}).values())
+        if job_id == "artifact-cleanup":
+            assert job["permissions"] == {"contents": "read", "actions": "write"}
+        else:
+            assert all(permission in {"read", "none"} for permission in job.get("permissions", {}).values())
         _assert_job_actions(job_id, job, revision)
-        if job_id != "smoke":
+        if job_id not in {"smoke", "artifact-cleanup"}:
             assert job["env"]["CI_REVISION"] == revision
     assert workflow["jobs"]["publish"]["needs"] == "validate"
+    cleanup = workflow["jobs"]["artifact-cleanup"]
+    assert cleanup["needs"] == ["smoke", "publish"]
+    assert cleanup["timeout-minutes"] == 10
+    assert cleanup["steps"] == [
+        {"name": "Check out trusted cleanup helper",
+         "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+         "with": {"repository": "EndurantDevs/endurant-ci", "ref": revision,
+                  "path": "ci", "persist-credentials": False}},
+        {"name": "Remove validated CI intermediates",
+         "env": {"GH_TOKEN": "${{ github.token }}", "PYTHONDONTWRITEBYTECODE": "1"},
+         "run": "python3 ci/scripts/artifact_cleanup.py"},
+    ]
