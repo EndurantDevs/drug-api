@@ -315,7 +315,7 @@ async def test_publication_failure_retains_both_generations(publication_case, mo
 
 
 @pytest.mark.asyncio
-async def test_sample_retains_stages_and_incumbents(publication_case):
+async def test_sample_discards_stages_and_preserves_incumbents(publication_case):
     case = publication_case
     await _save_one(case)
     before = await _pair_state(case)
@@ -323,13 +323,39 @@ async def test_sample_retains_stages_and_incumbents(publication_case):
     receipt = await _publish(case, complete=False)
     assert receipt["complete"] is False and receipt["published"] is False
     assert await _pair_state(case) == before and await _pair_state(case, "_old") == previous
-    staged = await _pair_state(case, "_" + case.attempt.suffix)
-    assert {name: staged[name]["oid"] for name in _MODELS} == case.attempt.table_oids
-    assert all(json.loads(state["comment"]) == receipt for state in staged.values())
+    assert await ndc_stage.ndc_table_oids(case.database, case.schema, case.attempt.suffix) == {
+        "product": None, "package": None,
+    }
     run = await _run_state(case)
-    assert run["status"] == "succeeded" and run["phase_detail"] == "ndc sample staged"
+    assert run["status"] == "succeeded" and run["phase_detail"] == "ndc sample validated"
     assert run["metrics"] == {"ndc_attempt_id": case.attempt.suffix, "ndc_sample": receipt,
                               "source_product_count": 1, "imported_product_count": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("foreign_owner", [False, True])
+async def test_failed_attempt_cleanup_preserves_live_pair_and_foreign_stages(publication_case, foreign_owner):
+    case = publication_case
+    await _save_one(case)
+    before = await _pair_state(case)
+    previous = await _pair_state(case, "_old")
+    assert await ndc_stage.fail_ndc_attempt(case.database, case.attempt) == 1
+    failed_run = await _run_state(case)
+    if foreign_owner:
+        await ndc_stage._comment_ndc_table(
+            case.database, case.schema, case.attempt.tables["package"].name, "foreign owner")
+        staged = await _pair_state(case, "_" + case.attempt.suffix)
+        with pytest.raises(RuntimeError, match="ownership changed"):
+            await ndc_stage.discard_ndc_stages(case.database, case.attempt)
+        assert await _pair_state(case, "_" + case.attempt.suffix) == staged
+    else:
+        await ndc_stage.discard_ndc_stages(case.database, case.attempt)
+        await ndc_stage.discard_ndc_stages(case.database, case.attempt)
+        assert await ndc_stage.ndc_table_oids(case.database, case.schema, case.attempt.suffix) == {
+            "product": None, "package": None,
+        }
+    assert await _pair_state(case) == before and await _pair_state(case, "_old") == previous
+    assert await _run_state(case) == failed_run
 
 
 @pytest.mark.asyncio

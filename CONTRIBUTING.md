@@ -22,6 +22,9 @@ Create feature and fix branches from `dev` and open normal pull requests into
 full-validation gate. After merge, maintainers verify the development deployment
 and its behavior before considering the change accepted.
 
+Do not run local aggregate pre-push hooks. Push with `git push --no-verify`;
+GitHub CI remains required.
+
 Once `dev` is stable, maintainers prepare a release to `main` only when a human
 requests it. Promote reviewed content through a release pull request using
 **Rebase and merge**. Passing CI or merging into `dev` does not itself request a

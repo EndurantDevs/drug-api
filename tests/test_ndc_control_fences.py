@@ -95,3 +95,24 @@ def test_terminal_native_row_is_not_overlaid_with_stale_running_progress(monkeyp
     monkeypatch.setattr(control_imports, "read_live_progress", lambda _run: pytest.fail("terminal overlay"))
     native_row_dict = {"run_id": "synthetic-run", "status": status, "metrics": {"ndc_attempt_id": "owned"}}
     assert control_imports._overlay_live_progress(native_row_dict) is native_row_dict
+
+
+@pytest.mark.asyncio
+async def test_explicit_retry_enqueues_a_fresh_run_without_reopening_failed_attempt(monkeypatch):
+    failed_run_dict = {"run_id": "synthetic-failed", "importer": "ndc", "status": "failed",
+                  "params": {"test_mode": True}, "metrics": {"ndc_attempt_id": "old-attempt"}}
+    monkeypatch.setattr(control_imports, "get_import_run", AsyncMock(return_value=failed_run_dict))
+    monkeypatch.setattr(control_imports, "db", SimpleNamespace(session=_admission_session))
+    monkeypatch.setattr(control_imports, "ensure_import_run_table", AsyncMock())
+    monkeypatch.setattr(control_imports, "insert_import_run", AsyncMock())
+    monkeypatch.setattr(control_imports, "_enqueue", AsyncMock(return_value={"status": "queued"}))
+    monkeypatch.setattr(control_imports, "update_import_run_after_enqueue", AsyncMock(return_value=1))
+    monkeypatch.setattr(control_imports, "enqueue_status_event", lambda _record: None)
+    monkeypatch.setattr(control_imports, "_write_run_live_progress", lambda *_args, **_kwargs: None)
+    retried, created = await control_imports.retry_import_run(failed_run_dict["run_id"], {})
+    assert created and retried["run_id"] != failed_run_dict["run_id"]
+    assert retried["retry_of_run_id"] == failed_run_dict["run_id"] and retried["params"] == failed_run_dict["params"]
+    assert "ndc_attempt_id" not in retried["metrics"]
+    assert control_imports._enqueue.call_args.args[1]["run_id"] == retried["run_id"]
+    assert control_imports.update_import_run_after_enqueue.call_args.args[1] == retried["run_id"]
+    assert failed_run_dict["status"] == "failed" and failed_run_dict["metrics"] == {"ndc_attempt_id": "old-attempt"}

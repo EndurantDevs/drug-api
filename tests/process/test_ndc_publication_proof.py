@@ -227,6 +227,7 @@ async def test_coordinator_never_publishes_before_complete_acquisition(monkeypat
     monkeypatch.setattr(ndc_product, "ensure_import_run_table", AsyncMock())
     monkeypatch.setattr(ndc_product, "create_ndc_stages", AsyncMock())
     monkeypatch.setattr(ndc_product, "fail_ndc_attempt", AsyncMock(return_value=1))
+    monkeypatch.setattr(ndc_product, "discard_ndc_stages", AsyncMock())
     monkeypatch.setattr(ndc_product, "acquire_ndc_manifest", AsyncMock(return_value={"selected": []}))
     monkeypatch.setattr(ndc_product, "process_results", AsyncMock(side_effect=RuntimeError("save") if failure == "save" else None))
 
@@ -251,12 +252,14 @@ async def test_coordinator_never_publishes_before_complete_acquisition(monkeypat
         with pytest.raises(asyncio.CancelledError if failure == "cancel" else RuntimeError):
             await ndc_product.init_file({}, {"run_id": "synthetic-run"})
         ndc_product.fail_ndc_attempt.assert_awaited_once()
+        ndc_product.discard_ndc_stages.assert_awaited_once()
         assert len(terminal_events) == 1 and terminal_events[0]["status"] == "failed"
         assert terminal_events[0]["error"] == {"code": "ndc_import_failed"}
         assert ("publish" in events) is (failure == "publish")
     else:
         assert await ndc_product.init_file({}, {"run_id": "synthetic-run"}) == {"complete": True}
         ndc_product.fail_ndc_attempt.assert_not_awaited()
+        ndc_product.discard_ndc_stages.assert_not_awaited()
         assert events == ["acquire", "acknowledged", "publish"]
         assert len(terminal_events) == 1 and terminal_events[0]["status"] == "succeeded"
         assert terminal_events[0]["metrics"]["ndc_publication"] == {"complete": True}
@@ -400,6 +403,16 @@ async def test_coordinator_failure_event_requires_owned_transition(monkeypatch, 
     with pytest.raises(RuntimeError, match="original"):
         await ndc_product.init_file({}, {"run_id": "synthetic-run"})
     assert len(calls) == changed
+
+
+@pytest.mark.asyncio
+async def test_cleanup_runs_after_status_failure_and_preserves_original_error(monkeypatch):
+    monkeypatch.setattr(ndc_product, "ensure_import_run_table", AsyncMock(side_effect=RuntimeError("source failure")))
+    monkeypatch.setattr(ndc_product, "fail_ndc_attempt", AsyncMock(side_effect=ValueError("status unavailable")))
+    monkeypatch.setattr(ndc_product, "discard_ndc_stages", AsyncMock(side_effect=ValueError("cleanup unavailable")))
+    with pytest.raises(RuntimeError, match="source failure"):
+        await ndc_product.init_file({}, {"run_id": "synthetic-run"})
+    ndc_product.discard_ndc_stages.assert_awaited_once()
 
 
 @pytest.mark.asyncio

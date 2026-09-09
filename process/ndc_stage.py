@@ -96,6 +96,19 @@ async def lock_ndc_stages(database, attempt: NdcAttempt, *, exclusive: bool = Fa
             raise RuntimeError("NDC stage ownership changed")
 
 
+async def discard_ndc_stages(database, attempt: NdcAttempt) -> None:
+    """Remove only this attempt's unpublished pair after verifying its locked identity."""
+    if not attempt.table_oids:
+        return
+    async with database.transaction():
+        current = await ndc_table_oids(database, attempt.schema, attempt.suffix)
+        if all(table_oid is None for table_oid in current.values()):
+            return
+        await lock_ndc_stages(database, attempt, exclusive=True)
+        names = ", ".join(f"{attempt.schema}.{name}_{attempt.suffix}" for name in ("product", "package"))
+        await database.status(f"DROP TABLE {names}")
+
+
 async def save_ndc_batch(database, attempt: NdcAttempt, products: list, packages: list) -> None:
     """Persist a complete paired batch, allowing only identical duplicate keys."""
     async with database.transaction() as session:
@@ -207,7 +220,7 @@ async def finish_ndc_publication(database, attempt: NdcAttempt, receipt: dict, *
     expected_suffix = "" if published else attempt.suffix
     if await ndc_table_oids(database, attempt.schema, expected_suffix) != attempt.table_oids:
         raise RuntimeError("NDC final table identity differs from audited stages")
-    phase = "ndc import published" if published else "ndc sample staged"
+    phase = "ndc import published" if published else "ndc sample validated"
     receipt_dict = {**receipt, "published": published, "completed_at": datetime.datetime.now(datetime.UTC).isoformat()}
     metrics_dict = {"ndc_attempt_id": attempt.suffix,
                     "ndc_publication" if published else "ndc_sample": receipt_dict,
@@ -224,10 +237,12 @@ async def finish_ndc_publication(database, attempt: NdcAttempt, receipt: dict, *
                              "total": attempt.counts["source_products"], "pct": 100, "message": phase}))
     if changed != 1:
         raise RuntimeError("NDC terminal success lost its run ownership fence")
-    comment = json.dumps(receipt_dict, sort_keys=True)
-    for name in attempt.tables:
-        table_name = name if published else f"{name}_{attempt.suffix}"
-        await _comment_ndc_table(database, attempt.schema, table_name, comment)
+    if published:
+        comment = json.dumps(receipt_dict, sort_keys=True)
+        for name in attempt.tables:
+            await _comment_ndc_table(database, attempt.schema, name, comment)
+    else:
+        await discard_ndc_stages(database, attempt)
     return receipt_dict
 
 

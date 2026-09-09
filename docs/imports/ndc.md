@@ -51,12 +51,15 @@ same transaction. An ownership or terminal-status mismatch rolls back publicatio
 The receipt describes a native publication, not an independently signed authority
 against a privileged database owner.
 
-Test/sample mode retains its owned stages and records an `ndc_sample` result with
-`complete=false` and `published=false`; it never replaces serving data. Failed
-stages are also retained for inspection. Their exact suffix is the run's
+Test/sample mode records an `ndc_sample` result with `complete=false` and
+`published=false`, then drops its owned stages in the same transaction; it never
+replaces serving data. After a failure, the coordinator has a separate ten-second
+budget to remove only its own unpublished pair, checking the locked OIDs and
+ownership comments first. A changed identity or unavailable database leaves the
+stages for inspection and logs the cleanup failure. The exact suffix remains in
 `metrics.ndc_attempt_id`; the caller's logical `import_id` remains unchanged.
-There is no automatic adoption, retry into those stages, or broad
-cleanup. A retry needs a new native run; the coordinator does not automatically retry a
+There is no automatic adoption, retry into old stages, or broad cleanup.
+A retry needs a new native run; the coordinator does not automatically retry a
 failed or canceled run. Legacy queued partition/save
 jobs are no longer worker entrypoints; drain the previous worker queue before
 switching to this coordinator.

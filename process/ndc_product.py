@@ -16,7 +16,7 @@ from process.import_status_events import enqueue_status_event
 from process.live_progress import enqueue_live_progress
 from process.ndc_acquire import acquire_ndc_manifest, consume_ndc_partitions
 from process.ndc_publish import publish_ndc_tables
-from process.ndc_stage import create_ndc_stages, fail_ndc_attempt, new_ndc_attempt, save_ndc_batch
+from process.ndc_stage import create_ndc_stages, discard_ndc_stages, fail_ndc_attempt, new_ndc_attempt, save_ndc_batch
 from process.redis_config import redis_settings
 
 logger = logging.getLogger(__name__)
@@ -199,14 +199,19 @@ async def init_file(ctx, task=None):
                 if await fail_ndc_attempt(db, attempt) == 1:
                     _announce_ndc_failure(attempt)
         except Exception:
-            logger.warning("NDC failure status could not be recorded; owned stages retained")
+            logger.warning("NDC failure status could not be recorded")
+        try:
+            async with asyncio.timeout(10):
+                await discard_ndc_stages(db, attempt)
+        except Exception:
+            logger.warning("NDC owned-stage cleanup failed; retained for inspection")
         raise
     _announce_ndc_completion(attempt, receipt)
     return receipt
 
 
 def _announce_ndc_completion(attempt, receipt):
-    phase = "ndc import published" if receipt["complete"] else "ndc sample staged"
+    phase = "ndc import published" if receipt["complete"] else "ndc sample validated"
     try:
         enqueue_status_event({
             "run_id": attempt.run_id, "importer": "ndc", "status": "succeeded", "phase_detail": phase,

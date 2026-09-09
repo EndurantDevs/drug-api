@@ -105,6 +105,7 @@ async def test_final_receipt_comments_require_exact_pair_and_successful_run_cas(
     attempt = _attempt()
     database = SimpleNamespace(status=AsyncMock(return_value=0 if guard == "terminal" else 1))
     monkeypatch.setattr(ndc_stage, "ndc_table_oids", AsyncMock(return_value={} if guard == "oid" else attempt.table_oids))
+    monkeypatch.setattr(ndc_stage, "discard_ndc_stages", AsyncMock())
     receipt_dict = {"format": "ndc-publication-v1", "complete": is_published}
     if guard != "valid":
         with pytest.raises(RuntimeError):
@@ -117,7 +118,8 @@ async def test_final_receipt_comments_require_exact_pair_and_successful_run_cas(
     transition = database.status.call_args_list[0]
     assert "AND metrics->>'ndc_attempt_id'=:attempt_id AND status='running'" in str(transition.args[0])
     assert json.loads(transition.kwargs["metrics"])["ndc_publication" if is_published else "ndc_sample"] == result
-    assert len(database.status.call_args_list) == 3
+    assert ndc_stage.discard_ndc_stages.await_count == int(not is_published)
+    assert len(database.status.call_args_list) == (3 if is_published else 1)
     for call in database.status.call_args_list[1:]:
         assert call.args[0].startswith("COMMENT ON TABLE rx_data.")
         assert json.dumps(result, sort_keys=True) in call.args[0]
@@ -231,3 +233,32 @@ def test_attempt_names_are_private_unique_and_schema_is_not_executable():
     assert first.tables["product"].name != second.tables["product"].name
     with pytest.raises(ValueError, match="schema"):
         ndc_stage.new_ndc_attempt("synthetic-run", "public; DROP SCHEMA public")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["owned", "absent", "uncreated", "foreign"])
+async def test_discard_removes_only_verified_unpublished_stages(monkeypatch, state):
+    attempt = _attempt()
+    if state == "uncreated":
+        attempt.table_oids = {}
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    database = SimpleNamespace(transaction=transaction, status=AsyncMock())
+    monkeypatch.setattr(ndc_stage, "ndc_table_oids", AsyncMock(return_value=(
+        {"product": None, "package": None} if state == "absent" else attempt.table_oids)))
+    monkeypatch.setattr(ndc_stage, "lock_ndc_stages", AsyncMock(
+        side_effect=RuntimeError("ownership changed") if state == "foreign" else None))
+    if state == "foreign":
+        with pytest.raises(RuntimeError, match="ownership changed"):
+            await ndc_stage.discard_ndc_stages(database, attempt)
+    else:
+        await ndc_stage.discard_ndc_stages(database, attempt)
+    if state == "owned":
+        ndc_stage.lock_ndc_stages.assert_awaited_once_with(database, attempt, exclusive=True)
+        database.status.assert_awaited_once_with(
+            f"DROP TABLE rx_data.product_{attempt.suffix}, rx_data.package_{attempt.suffix}")
+    else:
+        database.status.assert_not_awaited()
