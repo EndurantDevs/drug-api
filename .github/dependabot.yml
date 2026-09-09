@@ -11,9 +11,6 @@ updates:
         patterns:
           - "*"
     ignore:
-      - dependency-name: "caio"
-        versions:
-          - ">= 0.10.0"
       - dependency-name: "redis"
         versions:
           - ">= 6.0.0"
