@@ -13,9 +13,9 @@ from process.drug_indications import main as initiate_drug_indications_import
 from process.label import download_label_content, init_label_file, label_shutdown, label_startup
 from process.label import main as initiate_label_import
 from process.label import process_label_results
-from process.ndc_product import download_content, init_file
+from process.ndc_product import init_file
 from process.ndc_product import main as initiate_product_import
-from process.ndc_product import process_results, shutdown, startup
+from process.ndc_product import shutdown, startup
 from process.redis_config import redis_settings
 
 uvloop.install()
@@ -33,7 +33,10 @@ LABEL_QUEUE_NAME = (
 
 
 class NDC:
-    functions = [init_file, download_content, process_results, control_single_job_start]
+    functions = [init_file, control_single_job_start]
+    max_jobs = 1
+    retry_jobs = False
+    job_timeout = int(os.getenv("HLTHPRT_NDC_JOB_TIMEOUT_SECONDS", "86400"))
     on_startup = startup
     on_shutdown = shutdown
     queue_name = NDC_QUEUE_NAME

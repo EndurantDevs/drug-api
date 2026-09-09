@@ -220,7 +220,7 @@ async def test_database_session_reuses_active_async_session():
 
 
 @pytest.mark.asyncio
-async def test_ndc_startup_creates_suffixed_product_and_package_tables(monkeypatch):
+async def test_ndc_startup_does_not_touch_stage_tables(monkeypatch):
     fake_db = _RecordingDb()
 
     async def fake_init_db(*_args, **_kwargs):
@@ -228,40 +228,15 @@ async def test_ndc_startup_creates_suffixed_product_and_package_tables(monkeypat
 
     monkeypatch.setattr(ndc_product, "db", fake_db)
     monkeypatch.setattr(ndc_product, "init_db", fake_init_db)
-
-    context_dict = {}
-    await ndc_product.startup(context_dict)
-
-    import_date = context_dict["import_date"]
-    assert [table.name for table in fake_db.created_tables] == [
-        f"product_{import_date}",
-        f"package_{import_date}",
-    ]
-    assert f"DROP TABLE IF EXISTS rx_data.product_{import_date};" in fake_db.statements
-    assert f"DROP TABLE IF EXISTS rx_data.package_{import_date};" in fake_db.statements
+    await ndc_product.startup({})
+    assert not fake_db.created_tables
+    assert not fake_db.statements
 
 
 @pytest.mark.asyncio
-async def test_ndc_shutdown_indexes_stages_before_serving_changes_in_one_transaction(monkeypatch):
-    fake_db = _RecordingDb([100, 100, 200])
-
-    async def fake_mark_control_run(*_args, **_kwargs):
-        return None
-
-    monkeypatch.setattr(ndc_product, "db", fake_db)
-    monkeypatch.setattr(ndc_product, "mark_control_run", fake_mark_control_run)
-    monkeypatch.setattr(ndc_product, "print_time_info", lambda *_args, **_kwargs: None)
-
-    context_dict = {
-        "import_date": "20260213",
-        "context": {
-            "product_count": 100,
-            "start": datetime.datetime(2026, 2, 13),
-        },
-    }
-
-    await ndc_product._shutdown_impl(context_dict)
-
+async def test_ndc_legacy_publication_indexes_stages_before_serving_changes_in_one_transaction():
+    fake_db = _RecordingDb()
+    await ndc_publish.publish_ndc_tables(fake_db, "rx_data", "20260213")
     assert fake_db.events.count(("begin", None)) == 1
     assert fake_db.events.count(("commit", None)) == 1
     transaction_start = fake_db.events.index(("begin", None))

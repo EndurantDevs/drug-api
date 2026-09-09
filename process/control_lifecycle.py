@@ -98,7 +98,7 @@ async def control_single_job_start(ctx: dict[str, Any], task: dict[str, Any] | N
         await _stop_live_progress_heartbeat(heartbeat_task)
         if live_token is not None:
             reset_live_progress_context(live_token)
-    return {"status": "running", "run_id": control_task.run_id, "result": target_result}
+    return await _finish_native_result(control_task, target_result)
 
 
 def _control_task_from_payload(ctx: dict[str, Any], task: dict[str, Any] | None) -> ControlTask:
@@ -227,7 +227,7 @@ async def mark_control_run(
         error=error,
     )
     cancel_guard = _cancel_guard_for_status(status)
-    await db.status(
+    changed = await db.status(
         text(
             f"""
         UPDATE {schema}.import_run
@@ -241,6 +241,7 @@ async def mark_control_run(
                error = :error
          WHERE run_id = :run_id
            {cancel_guard}
+           AND (importer <> 'ndc' OR NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id'))
         """
         ),
         run_id=run_id,
@@ -253,6 +254,8 @@ async def mark_control_run(
         metrics=None if metrics is None else json.dumps(metrics),
         error=None if error is None else json.dumps(error),
     )
+    if changed != 1:
+        return
     enqueue_live_progress(
         **_live_progress_payload(progress_payload_dict, transition)
     )
@@ -366,3 +369,18 @@ async def ensure_import_run_table() -> None:
               AND status IN ('queued', 'starting', 'running', 'finalizing', 'canceling');
         """
     )
+
+
+def _native_result_status(control_task: ControlTask, result: Any) -> str:
+    """Reflect the NDC coordinator's already-committed native terminal result."""
+    if (control_task.target_module == "process.ndc_product" and isinstance(result, dict)
+            and result.get("format") == "ndc-publication-v1" and result.get("run_id") == control_task.run_id):
+        return "succeeded"
+    return "running"
+
+
+async def _finish_native_result(control_task: ControlTask, result: Any) -> dict[str, Any]:
+    result_status = _native_result_status(control_task, result)
+    if result_status == "succeeded":
+        await _flush_terminal_status_events()
+    return {"status": result_status, "run_id": control_task.run_id, "result": result}

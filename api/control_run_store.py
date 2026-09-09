@@ -30,21 +30,25 @@ async def update_import_run_after_enqueue(
     schema: str,
     run_id: str,
     enqueue_update: dict[str, Any],
-) -> None:
-    """Persist queue metadata after ARQ accepts or rejects a run."""
+) -> int:
+    """Persist queue metadata without overwriting an already claimed NDC run."""
     update_values_dict = {**enqueue_update, **_json_fields(enqueue_update)}
-    await db.status(
+    changed = await db.status(
         text(
             f"""
         UPDATE {schema}.import_run
            SET status = :status, phase_detail = :phase_detail, heartbeat_at = :heartbeat_at,
                progress = :progress, metrics = :metrics, error = :error
          WHERE run_id = :run_id
+           AND (importer <> 'ndc' OR (status='queued'
+                    AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id')))
         """
         ),
         run_id=run_id,
         **update_values_dict,
     )
+
+    return changed
 
 
 def _json_fields(values: dict[str, Any]) -> dict[str, str | None]:

@@ -215,8 +215,15 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
             if active:
                 return active, False
         raise
+    if importer == "ndc":
+        async with db.session() as session:
+            await session.commit()
     enqueue_update = await _enqueue(spec, run_record_dict)
-    await update_import_run_after_enqueue(schema, run_id, enqueue_update)
+    if await update_import_run_after_enqueue(schema, run_id, enqueue_update) != 1:
+        current_run = await get_import_run(run_id)
+        if current_run is None:
+            raise RuntimeError("import run disappeared after enqueue")
+        return current_run, True
     created_run_dict = {**run_record_dict, **enqueue_update}
     enqueue_status_event(created_run_dict)
     _write_run_live_progress(created_run_dict, publish_event=False)
@@ -319,7 +326,7 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
         cancel_signal = await _remove_queued_job(run)
         progress_payload_dict = {"unit": "run", "total": 1, "done": 1, "pct": 100, "message": "canceled"}
         metrics_payload_dict = {**(run.get("metrics") or {}), "cancel_signal": cancel_signal}
-        await db.status(
+        changed = await db.status(
             text(
                 f"""
             UPDATE {_schema()}.import_run
@@ -330,6 +337,8 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
                    progress = :progress,
                    metrics = :metrics
              WHERE run_id = :run_id
+               AND (importer <> 'ndc' OR (status='queued'
+                    AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id')))
             """
             ),
             run_id=run_id,
@@ -338,7 +347,7 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
             metrics=json.dumps(metrics_payload_dict),
         )
         updated = await get_import_run(run_id)
-        if updated:
+        if updated and changed == 1:
             _write_run_live_progress({**updated, "progress": progress_payload_dict}, publish_event=False)
             enqueue_status_event({**updated, "progress": progress_payload_dict, "metrics": metrics_payload_dict})
         return updated

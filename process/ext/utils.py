@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 
 import httpx
 import humanize
@@ -23,24 +24,32 @@ async def download_it(url):
         return r
 
 
-async def download_it_and_save(url, filepath):
+async def download_it_and_save(url, filepath, *, max_bytes=None):
     """Stream a URL into a local file, asking ARQ to retry transient failures."""
     transport = httpx.AsyncHTTPTransport(retries=3)
     timeout = httpx.Timeout(10)
     async with async_open(filepath, 'wb+') as afp:
         async with httpx.AsyncClient(timeout=timeout, transport=transport, headers=headers) as client:
             async with client.stream('GET', url) as response:
-                await _write_response_chunks(response, afp)
+                receipt = await _write_response_chunks(response, afp, max_bytes=max_bytes)
+                return {"url": str(response.url), **receipt}
 
 
-async def _write_response_chunks(response, afp) -> None:
+async def _write_response_chunks(response, afp, *, max_bytes=None) -> dict:
     if response.status_code != 200:
         raise Retry()
+    digest = hashlib.sha256()
+    byte_count = 0
     try:
         async for chunk in response.aiter_bytes(chunk_size=HTTP_CHUNK_SIZE):
+            byte_count += len(chunk)
+            if max_bytes is not None and byte_count > max_bytes:
+                raise ValueError("download exceeds byte limit")
             await afp.write(chunk)
+            digest.update(chunk)
     except (httpx.TimeoutException, httpx.ReadError, httpx.NetworkError):
         raise Retry()
+    return {"sha256": digest.hexdigest(), "size_bytes": byte_count}
 
 
 def make_class(model_cls, table_suffix):
