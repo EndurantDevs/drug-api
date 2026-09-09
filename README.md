@@ -55,11 +55,11 @@ HealthPorta can be used as:
 For AI-agent connectivity, see [HealthPorta MCP](https://app.healthporta.com/mcp).
 
 ## Local Setup
-Use Python 3.13, PostgreSQL 18 and Redis 7. Start PostgreSQL and Redis locally,
+Use Python 3.14 or newer, PostgreSQL 18 and Redis 7. Start PostgreSQL and Redis locally,
 then run from the repository root:
 
 ```bash
-python3.13 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
 cp .env.example .env
