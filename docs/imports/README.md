@@ -6,9 +6,9 @@
 
 | Import | Start command | Worker | Purpose |
 | --- | --- | --- | --- |
-| NDC | `python main.py start ndc` | `python main.py worker process.NDC --burst` | Import OpenFDA NDC products and packages |
-| Label | `python main.py start label` | `python main.py worker process.Labeling --burst` | Import OpenFDA drug labels |
-| Drug indications | `python main.py start drug-indications` | none | Derive drug-to-condition evidence from local DailyMed/OpenFDA labels |
+| NDC | `uv run --locked python main.py start ndc` | `uv run --locked python main.py worker process.NDC --burst` | Import OpenFDA NDC products and packages |
+| Label | `uv run --locked python main.py start label` | `uv run --locked python main.py worker process.Labeling --burst` | Import OpenFDA drug labels |
+| Drug indications | `uv run --locked python main.py start drug-indications` | none | Derive drug-to-condition evidence from local DailyMed/OpenFDA labels |
 
 ## Per-import Documentation
 - [NDC import](./ndc.md)

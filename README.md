@@ -55,13 +55,11 @@ HealthPorta can be used as:
 For AI-agent connectivity, see [HealthPorta MCP](https://app.healthporta.com/mcp).
 
 ## Local Setup
-Use Python 3.14 or newer, PostgreSQL 18 and Redis 7. Start PostgreSQL and Redis locally,
-then run from the repository root:
+Install `uv`, PostgreSQL 18 and Redis 7. The project accepts Python 3.14 or
+newer. Start PostgreSQL and Redis locally, then run from the repository root:
 
 ```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
+uv sync --locked
 cp .env.example .env
 ```
 
@@ -74,8 +72,8 @@ createuser --host=127.0.0.1 --username=postgres --no-superuser \
 createdb --host=127.0.0.1 --username=postgres --owner=drug_api drug_api
 psql --host=127.0.0.1 --username=drug_api --dbname=drug_api \
   --command='CREATE SCHEMA IF NOT EXISTS rx_data'
-python main.py db migrate
-python main.py server start --host 127.0.0.1 --port 8080
+uv run --locked python main.py db migrate
+uv run --locked python main.py server start --host 127.0.0.1 --port 8080
 ```
 
 In another terminal, `curl http://127.0.0.1:8080/api/v1/healthcheck/live`
@@ -89,7 +87,7 @@ RxNorm mapping and verify table publication behavior. They need no database,
 Redis server, source downloads or managed service:
 
 ```bash
-python -m pytest -q tests/process/test_ndc_rxnorm_mapping.py \
+uv run --locked pytest -q tests/process/test_ndc_rxnorm_mapping.py \
   tests/process/test_import_table_switching.py tests/api/test_healthcheck.py
 ```
 
@@ -97,8 +95,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for focused development checks.
 
 ### Runtime image
 
-The runtime image installs `requirements.txt`; contributor tools stay in
-`requirements-dev.txt`. Build for your native architecture:
+The runtime image installs only the production packages pinned in `uv.lock`.
+Build for your native architecture:
 
 ```bash
 docker build --build-arg HLTHPRT_SOURCE_COMMIT="$(git rev-parse HEAD)" --tag drug-api:local .
@@ -117,15 +115,15 @@ offline example.
 NDC / product import:
 
 ```bash
-python main.py start ndc
-python main.py worker process.NDC --burst
+uv run --locked python main.py start ndc
+uv run --locked python main.py worker process.NDC --burst
 ```
 
 Label import:
 
 ```bash
-python main.py start label
-python main.py worker process.Labeling --burst
+uv run --locked python main.py start label
+uv run --locked python main.py worker process.Labeling --burst
 ```
 
 Drug indication mapping additionally requires the public `healthcare-mrf-api`
@@ -134,8 +132,8 @@ and configure `HLTHPRT_CLINICAL_DB_PORT=5432` for the local PostgreSQL setup abo
 (the importer's default clinical port is 5440):
 
 ```bash
-python main.py start drug-indications --test
-python main.py start drug-indications
+uv run --locked python main.py start drug-indications --test
+uv run --locked python main.py start drug-indications
 ```
 
 Each import rebuilds staging tables and then swaps them into the live `rx_data` schema.

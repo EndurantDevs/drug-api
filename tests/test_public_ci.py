@@ -45,8 +45,16 @@ def test_public_ci_is_hosted_with_bounded_permissions_and_runs_import_checks():
     assert not job.get("continue-on-error")
     commands = "\n".join(step.get("run", "") for step in job["steps"])
     assert "scripts/ci/public_hygiene.py" in commands
-    assert "python -m pytest -q" in commands
+    assert "uv sync --locked --no-default-groups --group test" in commands
+    assert "uv run --locked --no-default-groups --group test --no-sync pytest -q" in commands
+    assert "pip" not in commands
     assert "test_process_" in commands or "tests/process/" in commands
+    setup_uv = next(step for step in job["steps"] if step.get("name") == "Install uv and Python")
+    assert setup_uv == {
+        "name": "Install uv and Python",
+        "uses": "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
+        "with": {"version": "0.12.11", "python-version": "3.14.7", "enable-cache": False},
+    }
     assert all(token not in text for token in ("secrets.", "vars.", "ghcr.io", "workflow_dispatch", "self-hosted"))
     for step in job["steps"]:
         assert not step.get("continue-on-error")

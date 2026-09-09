@@ -18,21 +18,18 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+    - name: Install uv and Python
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
       with:
+        version: 0.12.11
         python-version: 3.14.7
-        cache: pip
-        cache-dependency-path: 'requirements.txt
-
-          requirements-dev.txt
-
-          '
+        enable-cache: false
+    - name: Sync locked runtime and test dependencies
+      run: uv sync --locked --no-default-groups --group test
     - name: Check public repository hygiene
-      run: python scripts/ci/public_hygiene.py
-    - name: Install runtime and test dependencies
-      run: python -m pip install -r requirements.txt -c requirements-dev.txt pytest pytest-asyncio
+      run: uv run --locked --no-default-groups --group test --no-sync python scripts/ci/public_hygiene.py
     - name: Run synthetic import and API checks
-      run: python -m pytest -q tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py tests/api/test_healthcheck.py
+      run: uv run --locked --no-default-groups --group test --no-sync pytest -q tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py tests/api/test_healthcheck.py
         tests/test_local_setup.py tests/test_public_ci.py
     if: ${{ success() }}
   validate:
