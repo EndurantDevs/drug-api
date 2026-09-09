@@ -25,7 +25,7 @@ dependencies = [
     "mako==1.4.1",
     "markupsafe==3.0.3",
     "msgpack==1.2.2",
-    "multidict==6.7.1",
+    "multidict==6.8.0",
     "packaging==26.3",
     "pyaml==26.7.0",
     "pydantic==2.13.5",
@@ -67,4 +67,4 @@ dev = [
 [tool.uv]
 package = false
 no-build = true
-required-version = "==0.12.11"
+required-version = "==0.12.12"

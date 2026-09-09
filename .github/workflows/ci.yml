@@ -21,7 +21,7 @@ jobs:
     - name: Install uv and Python
       uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
       with:
-        version: 0.12.11
+        version: 0.12.12
         python-version: 3.14.7
         enable-cache: false
     - name: Sync locked runtime and test dependencies

@@ -53,7 +53,7 @@ def test_public_ci_is_hosted_with_bounded_permissions_and_runs_import_checks():
     assert setup_uv == {
         "name": "Install uv and Python",
         "uses": "astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d",
-        "with": {"version": "0.12.11", "python-version": "3.14.7", "enable-cache": False},
+        "with": {"version": "0.12.12", "python-version": "3.14.7", "enable-cache": False},
     }
     assert all(token not in text for token in ("secrets.", "vars.", "ghcr.io", "workflow_dispatch", "self-hosted"))
     for step in job["steps"]:
