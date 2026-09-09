@@ -15,7 +15,7 @@ For full condition/treatment coverage, also run `healthcare-mrf-api` clinical te
 
 ```bash
 cd ../healthcare-mrf-api
-uv run --locked python main.py start clinical-reference --import-id 20260525
+.venv/bin/python main.py start clinical-reference --import-id 20260525
 cd ../drug-api
 ```
 
