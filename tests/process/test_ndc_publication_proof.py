@@ -126,6 +126,7 @@ async def test_parallel_failure_or_cancellation_drains_peer_work(monkeypatch, sh
             released.set()
 
     monkeypatch.setattr(ndc_acquire, "_consume_declared_ndc_partition", consume_partition)
+    monkeypatch.setenv("HLTHPRT_NDC_PARTITION_CONCURRENCY", "2")
     manifest_dict = {"selected": [{"file": "one"}, {"file": "two"}], "sample_limit": 0}
     task = asyncio.create_task(ndc_acquire.consume_ndc_partitions(manifest_dict, AsyncMock()))
     if should_cancel:

@@ -56,14 +56,11 @@ async def ndc_publication_database():
         pytest.skip("requires an explicitly configured disposable PostgreSQL test database")
     database = Database()
     schema = f"ndc_publish_test_{uuid.uuid4().hex}"
-    created_extensions = []
     is_schema_created = False
     try:
         await database.connect()
         for extension in ("pg_trgm", "btree_gin"):
-            if not await database.scalar("SELECT 1 FROM pg_extension WHERE extname = :name", name=extension):
-                await database.status(f"CREATE EXTENSION {extension}")
-                created_extensions.append(extension)
+            await database.status(f"CREATE EXTENSION IF NOT EXISTS {extension}")
         await database.status(f"CREATE SCHEMA {schema}")
         is_schema_created = True
         await _seed_ndc_generations(database, schema)
@@ -72,8 +69,6 @@ async def ndc_publication_database():
         try:
             if is_schema_created:
                 await database.status(f"DROP SCHEMA {schema} CASCADE")
-            for extension in reversed(created_extensions):
-                await database.status(f"DROP EXTENSION {extension}")
         finally:
             await database.disconnect()
 

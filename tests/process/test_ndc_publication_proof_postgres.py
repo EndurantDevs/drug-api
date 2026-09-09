@@ -34,11 +34,6 @@ async def _drop_schema(database, schema):
     assert await database.scalar("SELECT to_regnamespace(:schema)", schema=schema) is None
 
 
-async def _drop_extension(database, extension):
-    await database.status(f"DROP EXTENSION IF EXISTS {extension}")
-    assert not await database.scalar("SELECT 1 FROM pg_extension WHERE extname=:name", name=extension)
-
-
 @pytest.fixture
 async def publication_case():
     database_name = os.getenv("HLTHPRT_DB_DATABASE", "")
@@ -52,9 +47,7 @@ async def publication_case():
         cleanup.push_async_callback(database.disconnect)
         await database.connect()
         for extension in ("pg_trgm", "btree_gin"):
-            if not await database.scalar("SELECT 1 FROM pg_extension WHERE extname=:name", name=extension):
-                cleanup.push_async_callback(_drop_extension, database, extension)
-                await database.status(f"CREATE EXTENSION {extension}")
+            await database.status(f"CREATE EXTENSION IF NOT EXISTS {extension}")
         cleanup.push_async_callback(_drop_schema, database, schema)
         await database.status(f"CREATE SCHEMA {schema}")
         await _create_run_table(database, schema)

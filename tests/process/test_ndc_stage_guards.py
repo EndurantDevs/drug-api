@@ -57,9 +57,11 @@ async def test_live_publication_uses_nonwaiting_lock_and_exact_predecessor(monke
     else:
         with pytest.raises(RuntimeError):
             await ndc_stage.check_ndc_incumbents(database, attempt)
-    assert all("NOWAIT" in call.args[0] for call in database.status.call_args_list)
     if guard == "busy":
-        database.status.assert_not_awaited()
+        database.status.assert_not_called()
+    else:
+        assert database.status.await_count == 2
+        assert all("NOWAIT" in call.args[0] for call in database.status.call_args_list)
 
 
 @pytest.mark.asyncio
