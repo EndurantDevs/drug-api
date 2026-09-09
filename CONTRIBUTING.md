@@ -22,6 +22,10 @@ Create feature and fix branches from `dev` and open normal pull requests into
 content to stable `main` through a release pull request using **Rebase and merge**.
 The public default branch remains `main`.
 
+For a security update proposed against `main`, maintainers first port the change
+to `dev` and complete the normal validation and release flow. Preserve the
+original pull request until the reviewed replacement is linked.
+
 Use `type/short-slug` names: `feature/<slug>`, `fix/<slug>`,
 `docs/<slug>`, `test/<slug>`, or `chore/<slug>`.
 
