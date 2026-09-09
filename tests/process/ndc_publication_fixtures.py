@@ -1,14 +1,59 @@
-"""Synthetic HTTP sources with real download, archive, and temporary-file handling."""
+"""Controlled HTTP sources and isolated connection fixtures for native publication."""
 
 import io
 import json
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from db.models import Package, Product
 from process import ndc_acquire
 from process.ext import utils
+
+
+@asynccontextmanager
+async def non_iso_publication_connection(database, monkeypatch):
+    """Pin one backend to a non-ISO session default and restore it before release."""
+    async with database.engine.connect() as connection:
+        initial_style = await connection.scalar(text("SHOW DateStyle"))
+        await connection.rollback()
+        try:
+            await connection.execute(text("SET DateStyle TO 'SQL, DMY'"))
+            await connection.commit()
+            with monkeypatch.context() as patch:
+                patch.setattr(database, "session_factory", async_sessionmaker(
+                    bind=connection, expire_on_commit=False, autoflush=False,
+                ))
+                yield connection
+        finally:
+            await connection.rollback()
+            await connection.execute(text("SELECT set_config('DateStyle', :style, false)"), {"style": initial_style})
+            await connection.commit()
+
+
+async def copy_publication_pair_bytes(connection, schema):
+    """Read the real dated pair with the current backend's COPY representation."""
+    raw_connection = await connection.get_raw_connection()
+    payloads_by_table = {}
+    for model in (Product, Package):
+        chunks = []
+
+        async def collect(chunk):
+            chunks.append(bytes(chunk))
+
+        columns = ", ".join('"' + column.name + '"' for column in model.__table__.columns)
+        primary_key = "product_id" if model is Product else "package_ndc"
+        completion = await raw_connection.driver_connection.copy_from_query(
+            f'SELECT {columns} FROM {schema}.{model.__tablename__} ORDER BY "{primary_key}" COLLATE "C"',
+            output=collect, format="csv", timeout=5,
+        )
+        assert completion == "COPY 1"
+        payloads_by_table[model.__tablename__] = b"".join(chunks)
+    return payloads_by_table
 
 
 def install_coordinator_sources(monkeypatch, manifest_url):

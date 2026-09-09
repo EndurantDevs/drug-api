@@ -153,6 +153,7 @@ async def audit_ndc_tables(database, session, attempt: NdcAttempt, acquisition: 
     """Hash exact locked native CSV bytes and require the full persisted census."""
     if sum(part["records"] for part in acquisition["partitions"]) != attempt.counts["source_products"]:
         raise RuntimeError("NDC acquired and persisted record census differs")
+    await database.status("SET LOCAL DateStyle TO 'ISO, YMD'")
     connection = await session.connection()
     raw_connection = await connection.get_raw_connection()
     tables_by_name = {}

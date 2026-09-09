@@ -66,18 +66,18 @@ async def test_live_publication_uses_nonwaiting_lock_and_exact_predecessor(monke
 @pytest.mark.parametrize("failure", [None, "source_census", "stage_census", "copy_census"])
 async def test_audit_binds_full_native_csv_hash_rows_and_schema(failure):
     attempt = _attempt()
-    payload = b'"quoted\nrow",\xc3\xa9\n'
+    csv_bytes = b'"quoted\nrow",\xc3\xa9\n'
 
     async def copy_from_query(_query, **options):
         assert options["format"] == "csv" and options["timeout"] == 120
-        await options["output"](bytearray(payload[:5]))
-        await options["output"](bytearray(payload[5:]))
+        await options["output"](bytearray(csv_bytes[:5]))
+        await options["output"](bytearray(csv_bytes[5:]))
         return "COPY 2" if failure == "copy_census" else "COPY 1"
 
     driver = SimpleNamespace(copy_from_query=copy_from_query)
     connection = SimpleNamespace(get_raw_connection=AsyncMock(return_value=SimpleNamespace(driver_connection=driver)))
     session = SimpleNamespace(connection=AsyncMock(return_value=connection))
-    database = SimpleNamespace(scalar=AsyncMock(return_value=2 if failure == "stage_census" else 1),
+    database = SimpleNamespace(status=AsyncMock(), scalar=AsyncMock(return_value=2 if failure == "stage_census" else 1),
                                all=AsyncMock(return_value=[{"name": "key", "type": "text", "not_null": True}]))
     acquisition_dict = {"partitions": [{"records": 2 if failure == "source_census" else 1}], "complete": True}
     if failure:
@@ -88,10 +88,14 @@ async def test_audit_binds_full_native_csv_hash_rows_and_schema(failure):
         assert receipt["counts"] == attempt.counts
         for name, summary in receipt["tables"].items():
             assert summary["oid"] == attempt.table_oids[name]
-            assert summary["sha256"] == hashlib.sha256(payload).hexdigest()
-            assert summary["size_bytes"] == len(payload)
+            assert summary["sha256"] == hashlib.sha256(csv_bytes).hexdigest()
+            assert summary["size_bytes"] == len(csv_bytes)
             assert summary["row_count"] == 1
             assert summary["columns"] == [{"name": "key", "type": "text", "not_null": True}]
+    if failure == "source_census":
+        database.status.assert_not_awaited()
+    else:
+        database.status.assert_awaited_once_with("SET LOCAL DateStyle TO 'ISO, YMD'")
 
 
 @pytest.mark.asyncio

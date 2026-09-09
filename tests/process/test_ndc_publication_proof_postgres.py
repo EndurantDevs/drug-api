@@ -23,7 +23,8 @@ from api import control_imports, control_run_store
 from db.connection import Database
 from db.models import Package, Product
 from process import control_lifecycle, ndc_product, ndc_publish, ndc_stage
-from tests.process.ndc_publication_fixtures import install_coordinator_sources
+from tests.process.ndc_publication_fixtures import (copy_publication_pair_bytes, install_coordinator_sources,
+                                                    non_iso_publication_connection)
 
 _MODELS = {"product": Product, "package": Package}
 
@@ -249,6 +250,27 @@ async def test_publication_receipt_binds_actual_pair(publication_case):
         assert await case.database.scalar("SELECT to_regclass(:name)", name=f"{case.schema}.{name}_{case.attempt.suffix}") is None
     previous = await _pair_state(case, "_old")
     assert {name: previous[name]["oid"] for name in _MODELS} == {name: before[name]["oid"] for name in _MODELS}
+
+
+@pytest.mark.asyncio
+async def test_publication_audit_uses_transaction_local_iso_dates(publication_case, monkeypatch):
+    case = publication_case
+    await _save_one(case)
+    async with non_iso_publication_connection(case.database, monkeypatch) as connection:
+        assert await case.database.scalar("SHOW DateStyle") == "SQL, DMY"
+        receipt = await _publish(case)
+        assert receipt["published"] is True
+        assert await connection.scalar(text("SHOW DateStyle")) == "SQL, DMY"
+        non_iso_by_table = await copy_publication_pair_bytes(connection, case.schema)
+        await connection.execute(text("SET LOCAL DateStyle TO 'ISO, YMD'"))
+        canonical_by_table = await copy_publication_pair_bytes(connection, case.schema)
+        for name, canonical_bytes in canonical_by_table.items():
+            assert b"2020-01-01" in canonical_bytes and b"01/01/2020" in non_iso_by_table[name]
+            assert canonical_bytes != non_iso_by_table[name]
+            assert receipt["tables"][name]["sha256"] == hashlib.sha256(canonical_bytes).hexdigest()
+            assert receipt["tables"][name]["size_bytes"] == len(canonical_bytes)
+        await connection.commit()
+        assert await connection.scalar(text("SHOW DateStyle")) == "SQL, DMY"
 
 
 @pytest.mark.asyncio
