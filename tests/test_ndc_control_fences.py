@@ -1,12 +1,17 @@
 """Late queue/cancellation results must not erase native NDC publication."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from arq import Retry
+from arq.jobs import serialize_job
+from arq.worker import create_worker
 
 from api import control_imports, control_run_store
+from process import NDC, ndc_product
 
 
 @pytest.mark.asyncio
@@ -116,3 +121,35 @@ async def test_explicit_retry_enqueues_a_fresh_run_without_reopening_failed_atte
     assert control_imports._enqueue.call_args.args[1]["run_id"] == retried["run_id"]
     assert control_imports.update_import_run_after_enqueue.call_args.args[1] == retried["run_id"]
     assert failed_run_dict["status"] == "failed" and failed_run_dict["metrics"] == {"ndc_attempt_id": "old-attempt"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["retry", "cancel"])
+async def test_ndc_worker_finishes_failed_acquisition_without_requeuing_owned_attempt(monkeypatch, failure):
+    monkeypatch.setenv("HLTHPRT_MAIN_RX_JSON_URL", "https://example.test/ndc/manifest")
+    for name in ("ensure_import_run_table", "create_ndc_stages", "discard_ndc_stages", "publish_ndc_tables"):
+        monkeypatch.setattr(ndc_product, name, AsyncMock())
+    monkeypatch.setattr(ndc_product, "fail_ndc_attempt", AsyncMock(return_value=1))
+    monkeypatch.setattr(ndc_product, "_announce_ndc_failure", lambda _attempt: None)
+    monkeypatch.setattr(ndc_product, "acquire_ndc_manifest", AsyncMock(
+        side_effect=Retry() if failure == "retry" else asyncio.CancelledError()))
+    pipeline = MagicMock()
+    pipeline.__aenter__.return_value = pipeline
+    pipeline.execute = AsyncMock(return_value=[serialize_job(
+        "init_file", ({"run_id": "synthetic-run"},), {}, None, 0, serializer=NDC.job_serializer), 1, True])
+    redis = MagicMock()
+    redis.pipeline.return_value = pipeline
+    worker = create_worker(NDC, redis_pool=redis, handle_signals=False, keep_result=0)
+    monkeypatch.setattr(worker, "finish_job", AsyncMock())
+
+    await worker.run_job("synthetic-job", 0)
+
+    assert worker.jobs_failed == 1 and worker.jobs_retried == worker.jobs_complete == 0
+    assert not worker.job_tasks
+    worker.finish_job.assert_awaited_once()
+    assert worker.finish_job.call_args.args[1] is True
+    ndc_product.create_ndc_stages.assert_awaited_once()
+    attempt = ndc_product.create_ndc_stages.call_args.args[1]
+    ndc_product.fail_ndc_attempt.assert_awaited_once_with(ndc_product.db, attempt)
+    ndc_product.discard_ndc_stages.assert_awaited_once_with(ndc_product.db, attempt)
+    ndc_product.publish_ndc_tables.assert_not_called()
