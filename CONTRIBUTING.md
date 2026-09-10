@@ -70,7 +70,7 @@ scope:
 ```bash
 uv run --locked ruff check --select E9,F api db process scripts tests main.py
 uv run --locked ruff check --select I api db process tests main.py
-uv run --locked ruff format <touched-python-paths>
+uv run --locked ruff format --check <new-python-paths>
 ```
 
 Pylint retains all existing error checks and adds member inference for product
@@ -82,4 +82,8 @@ uv run --locked pylint --errors-only api db process main.py
 uv run --locked pylint --source-roots=. --errors-only --disable=no-member tests
 ```
 
-The readability budget remains the naming and complexity policy.
+CI enforces formatting for newly added Python files against the exact target
+base, including renames. Existing files are not automatically reformatted;
+adopt them in reviewed groups only after checking the readability budget.
+The readability budget remains the naming and complexity policy, and its
+physical-line limits must not be relaxed to accommodate wrapping.
