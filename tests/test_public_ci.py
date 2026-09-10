@@ -105,7 +105,8 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
             assert job["if"] == "${{ success() }}"
         else:
             assert job["name"] == "${{ " + metadata_only + f" && '{label} (metadata only)' || '{label}' " + "}}"
-            assert job["if"] == "${{ !(" + metadata_only + ") && (success()) }}"
+            condition = "always()" if job_id == "artifact-cleanup" else "success()"
+            assert job["if"] == "${{ !(" + metadata_only + ") && (" + condition + ") }}"
         assert "uses" not in job
         assert job["runs-on"] == "ubuntu-latest"
         assert not job.get("continue-on-error")

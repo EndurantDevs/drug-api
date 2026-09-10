@@ -43,7 +43,7 @@ jobs:
     outputs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
     env:
-      CI_REVISION: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
+      CI_REVISION: 8eee678b70898023732f026bd2f6a48055fe8c0b
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -51,7 +51,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -120,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
+      CI_REVISION: 8eee678b70898023732f026bd2f6a48055fe8c0b
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -128,7 +128,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -187,14 +187,14 @@ jobs:
       actions: read
       packages: write
     env:
-      CI_REVISION: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
+      CI_REVISION: 8eee678b70898023732f026bd2f6a48055fe8c0b
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
     - name: Check out trusted image publisher
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
         path: ci
         persist-credentials: false
     - name: Authenticate DEV image input
@@ -250,6 +250,8 @@ jobs:
     timeout-minutes: 10
     needs:
     - dev-image-publication
+    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+      && (always()) }}
     permissions:
       contents: read
       actions: write
@@ -258,7 +260,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
         path: ci
         persist-credentials: false
     - name: Remove validated CI intermediates
@@ -266,8 +268,6 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         PYTHONDONTWRITEBYTECODE: '1'
       run: python3 ci/scripts/artifact_cleanup.py
-    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
-      && (success()) }}
 'on':
   pull_request:
     types:
