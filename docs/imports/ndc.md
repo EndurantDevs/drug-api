@@ -36,7 +36,13 @@ responses cannot overwrite a claimed attempt or its terminal receipt.
 The coordinator records the exact downloaded manifest and archive SHA-256 hashes,
 byte sizes, the NDC `export_date`, canonical SHA-256 identities of the NDC section
 and selected partition list, declared and parsed record counts, and acknowledged product/package
-counts. Identical duplicate keys reuse the stored row; a missing key, conflicting
+counts. Within one source product, repeated package identities with contradictory
+marketing start dates retain an unknown (`NULL`) date instead of choosing an
+arbitrary date. The importer logs the affected identity count and still counts
+every source package occurrence. Equal dates and dates on different package
+identities remain unchanged. Conflicts across source products, or in any other
+package field, still fail the attempt. Identical normalized duplicate keys reuse
+the stored row; a missing key, conflicting
 payload, failed row write, or incomplete partition fails the attempt. Duplicate declared partition URLs are
 also rejected. NDC-scoped identities remain stable when another FDA endpoint
 changes the shared download catalog. This is
