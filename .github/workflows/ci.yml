@@ -24,9 +24,9 @@ jobs:
       with:
         python-version: 3.14.7
     - name: Install pinned uv
-      run: 'python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: ''uv==0.12.12''
-
-        test "$(uv --version | awk ''{print $2}'')" = 0.12.12'
+      run: "printf '%s\\n' 'uv==0.12.12 --hash=sha256:fa5df02fc619a3cc7a58810d6ffeb80ca1e01404b8ef7239bd1cf2103c02cacf' |\n\
+        \  python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin\n\
+        test \"$(uv --version | awk '{print $2}')\" = 0.12.12\n"
     - name: Sync locked runtime and test dependencies
       run: uv sync --locked --no-default-groups --group test
     - name: Check public repository hygiene
@@ -43,7 +43,7 @@ jobs:
     outputs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
     env:
-      CI_REVISION: cbddad3a880b376a302cd9a251e9e66861b4e4e4
+      CI_REVISION: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -51,7 +51,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: cbddad3a880b376a302cd9a251e9e66861b4e4e4
+        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -81,11 +81,9 @@ jobs:
       with:
         python-version: 3.14.7
     - name: Install pinned uv
-      run: 'python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: ''uv==0.12.12''
-
-        test "$(uv --version | awk ''{print $2}'')" = 0.12.12
-
-        '
+      run: "printf '%s\\n' 'uv==0.12.12 --hash=sha256:fa5df02fc619a3cc7a58810d6ffeb80ca1e01404b8ef7239bd1cf2103c02cacf' |\n\
+        \  python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin\n\
+        test \"$(uv --version | awk '{print $2}')\" = 0.12.12\n"
     - name: Run complete public source validation
       env:
         PUBLIC_CI_ARTIFACT_ROOT: ${{ runner.temp }}/drug-public-measurement
@@ -122,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: cbddad3a880b376a302cd9a251e9e66861b4e4e4
+      CI_REVISION: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -130,7 +128,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: cbddad3a880b376a302cd9a251e9e66861b4e4e4
+        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -189,14 +187,14 @@ jobs:
       actions: read
       packages: write
     env:
-      CI_REVISION: cbddad3a880b376a302cd9a251e9e66861b4e4e4
+      CI_REVISION: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
     - name: Check out trusted image publisher
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: cbddad3a880b376a302cd9a251e9e66861b4e4e4
+        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
         path: ci
         persist-credentials: false
     - name: Authenticate DEV image input
@@ -260,7 +258,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: cbddad3a880b376a302cd9a251e9e66861b4e4e4
+        ref: 5b9adbbd3c82f88f6d6085bc43c87d57da9202a6
         path: ci
         persist-credentials: false
     - name: Remove validated CI intermediates
