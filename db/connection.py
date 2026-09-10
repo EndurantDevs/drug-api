@@ -19,10 +19,15 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.schema import Table as SATable
-from sqlalchemy.sql import Executable
 
-from db.statement_adapters import (DeleteAdapter, FuncProxy, InsertAdapter, SelectAdapter, StatementAdapter,
-                                   UpdateAdapter)
+from db.statement_adapters import (
+    DeleteAdapter,
+    FuncProxy,
+    InsertAdapter,
+    SelectAdapter,
+    StatementAdapter,
+    UpdateAdapter,
+)
 
 
 class QueryDescriptor:

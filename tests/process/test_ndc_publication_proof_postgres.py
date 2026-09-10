@@ -23,8 +23,11 @@ from api import control_imports, control_run_store
 from db.connection import Database
 from db.models import Package, Product
 from process import control_lifecycle, ndc_product, ndc_publish, ndc_stage
-from tests.process.ndc_publication_fixtures import (copy_publication_pair_bytes, install_coordinator_sources,
-                                                    non_iso_publication_connection)
+from tests.process.ndc_publication_fixtures import (
+    copy_publication_pair_bytes,
+    install_coordinator_sources,
+    non_iso_publication_connection,
+)
 
 _MODELS = {"product": Product, "package": Package}
 

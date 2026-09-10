@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from process import control_lifecycle, ndc_acquire, ndc_product, ndc_publish, ndc_stage
+from process import control_lifecycle, ndc_acquire, ndc_product, ndc_stage
 from process.ext import utils
 from tests.process.ndc_publication_fixtures import install_coordinator_sources
 

@@ -2,7 +2,12 @@
 
 from typing import Any
 
-from process.ndc_stage import audit_ndc_tables, check_ndc_incumbents, finish_ndc_publication, lock_ndc_stages
+from process.ndc_stage import (
+    audit_ndc_tables,
+    check_ndc_incumbents,
+    finish_ndc_publication,
+    lock_ndc_stages,
+)
 
 
 async def publish_ndc_tables(database: Any, db_schema: str, import_date: str, *,

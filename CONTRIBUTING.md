@@ -60,3 +60,26 @@ uv run --locked pytest -q tests/process/test_ndc_rxnorm_mapping.py \
 These tests do not require PostgreSQL, Redis or source downloads. API contract
 checks are available with `uv run --locked pytest -q tests/test_openapi_spec.py`.
 GitHub CI is the full-validation gate; no local aggregate gate is required.
+
+## Python quality
+
+Ruff is the Python linter, import sorter, and formatter. The repository checks
+correctness across Python source and import order across the established isort
+scope:
+
+```bash
+uv run --locked ruff check --select E9,F api db process scripts tests main.py
+uv run --locked ruff check --select I api db process tests main.py
+uv run --locked ruff format <touched-python-paths>
+```
+
+Pylint retains all existing error checks and adds member inference for product
+code. Tests keep the existing `no-member` exception because their runtime
+monkeypatches cannot be inferred statically:
+
+```bash
+uv run --locked pylint --errors-only api db process main.py
+uv run --locked pylint --source-roots=. --errors-only --disable=no-member tests
+```
+
+The readability budget remains the naming and complexity policy.

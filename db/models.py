@@ -1,6 +1,16 @@
 import os
 
-from sqlalchemy import DATE, JSON, TEXT, BigInteger, Boolean, Column, DateTime, Float, String
+from sqlalchemy import (
+    DATE,
+    JSON,
+    TEXT,
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    String,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from db.connection import db
