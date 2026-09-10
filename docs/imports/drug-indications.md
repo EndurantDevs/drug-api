@@ -10,14 +10,14 @@ Run after `ndc` and `label` have published current tables. `label` supplies indi
 Run the `healthcare-mrf-api` `clinical-reference` import first on the shared Postgres instance. The importer requires `mrf.code_relationship`, `mrf.code_catalog`, and `mrf.code_synonym` unless test/allow-empty mode is explicitly enabled.
 
 ```bash
-python main.py start drug-indications --test
-python main.py start drug-indications
+uv run --locked python main.py start drug-indications --test
+uv run --locked python main.py start drug-indications
 ```
 
 Optional:
 
 ```bash
-python main.py start drug-indications --import-id 20260525
+uv run --locked python main.py start drug-indications --import-id 20260525
 ```
 
 ## Tables

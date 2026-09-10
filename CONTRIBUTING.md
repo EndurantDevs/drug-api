@@ -1,6 +1,6 @@
 # Contributing
 
-Work from the repo root in an activated virtualenv. Keep changes focused.
+Work from the repo root after `uv sync --locked`. Keep changes focused.
 
 ## Contributor License Agreement
 
@@ -40,7 +40,7 @@ Use `type/short-slug` names: `feature/<slug>`, `fix/<slug>`,
 ## Commit Messages
 
 Use the style in [docs/commit-messages.md](docs/commit-messages.md). Run
-`python3 scripts/check_commit_messages.py --last 1` before pushing
+`uv run --locked python scripts/check_commit_messages.py --last 1` before pushing
 hand-written commits.
 
 ## Tests
@@ -53,10 +53,10 @@ Use the [local setup](README.md#local-setup) to install contributor dependencies
 For example, validate synthetic NDC normalization and publication behavior with:
 
 ```bash
-python -m pytest -q tests/process/test_ndc_rxnorm_mapping.py \
+uv run --locked pytest -q tests/process/test_ndc_rxnorm_mapping.py \
   tests/process/test_import_table_switching.py
 ```
 
 These tests do not require PostgreSQL, Redis or source downloads. API contract
-checks are available with `python -m pytest -q tests/test_openapi_spec.py`.
+checks are available with `uv run --locked pytest -q tests/test_openapi_spec.py`.
 GitHub CI is the full-validation gate; no local aggregate gate is required.

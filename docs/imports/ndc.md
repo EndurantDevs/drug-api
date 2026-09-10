@@ -9,12 +9,12 @@ Imports OpenFDA NDC data and publishes normalized product and package tables use
 
 ## Start Command
 ```bash
-python main.py start ndc
+uv run --locked python main.py start ndc
 ```
 
 ## Worker
 ```bash
-python main.py worker process.NDC --burst
+uv run --locked python main.py worker process.NDC --burst
 ```
 
 ## Main Outputs

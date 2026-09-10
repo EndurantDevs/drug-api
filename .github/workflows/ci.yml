@@ -6,9 +6,10 @@ permissions:
   actions: read
 concurrency:
   group: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
-    && format('ci-metadata-{0}', github.run_id) || format('ci-{0}', github.ref) }}
-  cancel-in-progress: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title
-    && !github.event.changes.base) && github.ref != 'refs/heads/main' }}
+    && format('ci-metadata-{0}', github.run_id) || github.event_name == 'push' && format('ci-push-{0}', github.run_id) ||
+    format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.event.action
+    == 'edited' && !github.event.changes.title && !github.event.changes.base) }}
 jobs:
   smoke:
     name: portable import checks
@@ -18,22 +19,21 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+    - name: Install Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
-        python-version: 3.13.15
-        cache: pip
-        cache-dependency-path: 'requirements.txt
-
-          requirements-dev.txt
-
-          '
+        python-version: 3.14.7
+    - name: Install pinned uv
+      run: "printf '%s\\n' 'uv==0.12.12 --hash=sha256:fa5df02fc619a3cc7a58810d6ffeb80ca1e01404b8ef7239bd1cf2103c02cacf' |\n\
+        \  python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin\n\
+        test \"$(uv --version | awk '{print $2}')\" = 0.12.12\n"
+    - name: Sync locked runtime and test dependencies
+      run: uv sync --locked --no-default-groups --group test
     - name: Check public repository hygiene
-      run: python scripts/ci/public_hygiene.py
-    - name: Install runtime and test dependencies
-      run: python -m pip install -r requirements.txt -c requirements-dev.txt pytest pytest-asyncio
+      run: uv run --locked --no-default-groups --group test --no-sync python scripts/ci/public_hygiene.py
     - name: Run synthetic import and API checks
-      run: python -m pytest -q tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py tests/api/test_healthcheck.py
-        tests/test_local_setup.py tests/test_public_ci.py
+      run: uv run --locked --no-default-groups --group test --no-sync pytest -q tests/process/test_ndc_rxnorm_mapping.py tests/process/test_import_table_switching.py
+        tests/api/test_healthcheck.py tests/test_local_setup.py tests/test_public_ci.py
     if: ${{ success() }}
   validate:
     name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
@@ -43,7 +43,7 @@ jobs:
     outputs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
     env:
-      CI_REVISION: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
+      CI_REVISION: 8eee678b70898023732f026bd2f6a48055fe8c0b
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -51,7 +51,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -79,11 +79,26 @@ jobs:
         '
     - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
-        python-version: 3.13.15
+        python-version: 3.14.7
+    - name: Install pinned uv
+      run: "printf '%s\\n' 'uv==0.12.12 --hash=sha256:fa5df02fc619a3cc7a58810d6ffeb80ca1e01404b8ef7239bd1cf2103c02cacf' |\n\
+        \  python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin\n\
+        test \"$(uv --version | awk '{print $2}')\" = 0.12.12\n"
     - name: Run complete public source validation
       env:
         PUBLIC_CI_ARTIFACT_ROOT: ${{ runner.temp }}/drug-public-measurement
+        PUBLIC_CI_EXPORT_IMAGE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && '1' || '0' }}
+        GH_TOKEN: ${{ github.token }}
       run: bash "$CI_ROOT/scripts/drug/check" measure
+    - name: Upload tested DEV image
+      if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: drug-public-image-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/drug-public-image-staging-${{ github.run_id }}-${{ github.run_attempt }}/
+        if-no-files-found: error
+        retention-days: 1
+        compression-level: 0
     - name: Upload public coverage staging data
       id: staging
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -105,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
+      CI_REVISION: 8eee678b70898023732f026bd2f6a48055fe8c0b
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -113,7 +128,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -158,14 +173,85 @@ jobs:
         retention-days: 90
     if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
       && (success()) }}
+  dev-image-publication:
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
+      && 'DEV image publication (metadata only)' || 'DEV image publication' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+    - smoke
+    - publish
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      packages: write
+    env:
+      CI_REVISION: 8eee678b70898023732f026bd2f6a48055fe8c0b
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+    - name: Check out trusted image publisher
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: EndurantDevs/endurant-ci
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
+        path: ci
+        persist-credentials: false
+    - name: Authenticate DEV image input
+      id: image
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 ci/scripts/source_image.py prepare
+    - name: Download validated image archive
+      if: steps.image.outputs.publish == 'true'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        artifact-ids: ${{ steps.image.outputs.artifact_id }}
+        digest-mismatch: error
+        path: ${{ runner.temp }}/public-image-download
+        merge-multiple: true
+    - name: Stage DEV image publication intent
+      if: steps.image.outputs.publish == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 ci/scripts/source_image.py stage
+    - name: Upload DEV image publication intent
+      if: steps.image.outputs.publish == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: drug-public-image-intent-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/public-image-intent/intent.json
+        if-no-files-found: error
+        retention-days: 90
+    - name: Publish validated DEV image
+      if: steps.image.outputs.publish == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 ci/scripts/source_image.py publish
+    - name: Upload DEV image receipt
+      if: steps.image.outputs.publish == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: drug-public-image-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/public-image-receipt/image.json
+        if-no-files-found: error
+        retention-days: 90
+    - name: Reconcile DEV image publication
+      if: always() && steps.image.outputs.publish == 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python3 ci/scripts/source_image.py reconcile
+    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+      && (success()) }}
   artifact-cleanup:
     name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
       && 'CI artifact cleanup (metadata only)' || 'CI artifact cleanup' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs:
-    - smoke
-    - publish
+    - dev-image-publication
+    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+      && (always()) }}
     permissions:
       contents: read
       actions: write
@@ -174,7 +260,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
+        ref: 8eee678b70898023732f026bd2f6a48055fe8c0b
         path: ci
         persist-credentials: false
     - name: Remove validated CI intermediates
@@ -182,8 +268,6 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         PYTHONDONTWRITEBYTECODE: '1'
       run: python3 ci/scripts/artifact_cleanup.py
-    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
-      && (success()) }}
 'on':
   pull_request:
     types:

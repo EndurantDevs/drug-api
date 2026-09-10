@@ -1,21 +1,23 @@
-FROM python:3.13.15-slim-trixie@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
+FROM python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.12@sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4 \
+    /uv /usr/local/bin/uv
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never
+WORKDIR /opt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev \
+    && uv cache clean
+
+FROM python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 ARG HLTHPRT_SOURCE_COMMIT
-ARG PIP_VERSION=26.2.1
 LABEL org.opencontainers.image.revision=${HLTHPRT_SOURCE_COMMIT}
-
-WORKDIR /wheels
-ADD ./requirements.txt /wheels
 
 WORKDIR /opt
 RUN apt-get update \
     && if apt-cache show libaio1t64 >/dev/null 2>&1; then LIBAIO_PKG=libaio1t64; else LIBAIO_PKG=libaio1; fi \
-    && apt-get install -y --no-install-recommends "${LIBAIO_PKG}" gcc g++ make libc6-dev pkg-config git curl nginx \
-    && python3 -m venv venv \
-    && . venv/bin/activate \
-    && pip install --no-compile "pip==${PIP_VERSION}" \
-    && pip install --no-compile -r /wheels/requirements.txt -f /wheels \
-    && pip check \
+    && apt-get install -y --no-install-recommends "${LIBAIO_PKG}" nginx \
     && install -d -o nobody -g nogroup -m 755 /run /var/log/nginx \
     && install -d -o nobody -g nogroup -m 700 \
         /var/lib/nginx/body \
@@ -23,11 +25,9 @@ RUN apt-get update \
         /var/lib/nginx/fastcgi \
         /var/lib/nginx/uwsgi \
         /var/lib/nginx/scgi \
-    && rm -rf /wheels \
-    && rm -rf /root/.cache/pip/* \
-    && find . -name '*.pyc' -delete \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
 
 ARG HLTHPRT_LOG_CFG=./logging.yaml
 ARG HLTHPRT_RELEASE="dev"

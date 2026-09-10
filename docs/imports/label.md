@@ -9,12 +9,12 @@ Imports OpenFDA drug label records and publishes the normalized `label` table us
 
 ## Start Command
 ```bash
-python main.py start label
+uv run --locked python main.py start label
 ```
 
 ## Worker
 ```bash
-python main.py worker process.Labeling --burst
+uv run --locked python main.py worker process.Labeling --burst
 ```
 
 ## Main Outputs
