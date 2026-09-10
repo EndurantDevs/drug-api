@@ -2,26 +2,41 @@
 
 from typing import Any
 
+from process.ndc_stage import audit_ndc_tables, check_ndc_incumbents, finish_ndc_publication, lock_ndc_stages
 
-async def publish_ndc_tables(database: Any, db_schema: str, import_date: str) -> None:
-    """Create indexes and swap staged product/package tables into service."""
+
+async def publish_ndc_tables(database: Any, db_schema: str, import_date: str, *,
+                             attempt=None, acquisition=None):
+    """Build staged indexes before touching either live table, then publish atomically."""
     await database.status("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
     await database.status("CREATE EXTENSION IF NOT EXISTS btree_gin;")
-    for table in ['product', 'package']:
-        async with database.transaction():
+    async with database.transaction() as session:
+        if attempt is not None:
+            if attempt.schema != db_schema or attempt.suffix != import_date:
+                raise ValueError("NDC publication scope differs from stage owner")
+            await lock_ndc_stages(database, attempt, exclusive=True)
+            if not acquisition["complete"]:
+                receipt = await audit_ndc_tables(database, session, attempt, acquisition)
+                return await finish_ndc_publication(database, attempt, receipt, published=False)
+        for table in ['product', 'package']:
+            print(f'Creating indexes for {table} ...')
+            await database.status(
+                f"CREATE INDEX {table}_idx_product_ndc_{import_date} ON "
+                f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
+            if table == 'product':
+                await _create_product_indexes(database, db_schema, import_date)
+        if attempt is not None:
+            receipt = await audit_ndc_tables(database, session, attempt, acquisition)
+            await check_ndc_incumbents(database, attempt)
+        for table in ['product', 'package']:
             await _publish_single_ndc_table(database, db_schema, table, import_date)
+        if attempt is not None:
+            return await finish_ndc_publication(database, attempt, receipt, published=True)
+    return None
 
 
 async def _publish_single_ndc_table(database: Any, db_schema: str, table: str, import_date: str) -> None:
-    print(f'Creating indexes for {table} ...')
-    await database.status(
-        f"CREATE INDEX {table}_idx_product_ndc_{import_date} ON "
-        f"{db_schema}.{table}_{import_date} USING GIN(product_ndc);")
-
     await database.status(f"DROP TABLE IF EXISTS {db_schema}.{table}_old;")
-
-    if table == 'product':
-        await _create_product_indexes(database, db_schema, import_date)
 
     await database.status(f"ALTER INDEX IF EXISTS "
                           f"{db_schema}.{table}_idx_product_ndc RENAME TO "

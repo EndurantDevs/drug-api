@@ -18,9 +18,17 @@ pull request.
 ## Branches
 
 Create feature and fix branches from `dev` and open normal pull requests into
-`dev`. After CI and development acceptance, maintainers promote the reviewed
-content to stable `main` through a release pull request using **Rebase and merge**.
-The public default branch remains `main`.
+`dev`. Run focused local checks for the changed behavior; GitHub CI is the
+full-validation gate. After merge, maintainers verify the development deployment
+and its behavior before considering the change accepted.
+
+Do not run local aggregate pre-push hooks. Push with `git push --no-verify`;
+GitHub CI remains required.
+
+Once `dev` is stable, maintainers prepare a release to `main` only when a human
+requests it. Promote reviewed content through a release pull request using
+**Rebase and merge**. Passing CI or merging into `dev` does not itself request a
+production release. The public default branch remains `main`.
 
 For a security update proposed against `main`, maintainers first port the change
 to `dev` and complete the normal validation and release flow. Preserve the

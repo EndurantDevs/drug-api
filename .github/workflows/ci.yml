@@ -43,7 +43,7 @@ jobs:
     outputs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
     env:
-      CI_REVISION: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
+      CI_REVISION: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -51,7 +51,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
+        ref: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -105,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
+      CI_REVISION: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -113,7 +113,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 7ed718ee8d50f3e34cc7e7cc4d835bd8ce9d1349
+        ref: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -156,6 +156,32 @@ jobs:
           '
         if-no-files-found: error
         retention-days: 90
+    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+      && (success()) }}
+  artifact-cleanup:
+    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
+      && 'CI artifact cleanup (metadata only)' || 'CI artifact cleanup' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs:
+    - smoke
+    - publish
+    permissions:
+      contents: read
+      actions: write
+    steps:
+    - name: Check out trusted cleanup helper
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: EndurantDevs/endurant-ci
+        ref: 61cc32603f8db2181fd70d6e9a74beaf0a14f0c2
+        path: ci
+        persist-credentials: false
+    - name: Remove validated CI intermediates
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PYTHONDONTWRITEBYTECODE: '1'
+      run: python3 ci/scripts/artifact_cleanup.py
     if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
       && (success()) }}
 'on':
