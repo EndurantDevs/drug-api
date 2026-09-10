@@ -135,6 +135,23 @@ def _package_row_dict_from_record(
     return package_row_dict
 
 
+def _package_rows_from_record(source_record: dict, product: dict, package_columns: list[str]) -> list[dict]:
+    """Keep every package occurrence, representing contradictory start dates as unknown."""
+    rows = [_package_row_dict_from_record(package, product, package_columns)
+            for package in source_record['packaging']]
+    dates_by_package = {}
+    for row in rows:
+        dates_by_package.setdefault(row['package_ndc'], set()).add(row['marketing_start_date'])
+    ambiguous = {key for key, dates in dates_by_package.items() if len(dates) > 1}
+    if ambiguous:
+        logger.warning("NDC package start dates disagree within one product; using unknown dates for %d identities",
+                       len(ambiguous))
+    for row in rows:
+        if row['package_ndc'] in ambiguous:
+            row['marketing_start_date'] = None
+    return rows
+
+
 async def process_results(ctx, task):
     """Normalize and acknowledge one complete batch against its coordinator's stages."""
     attempt = ctx['ndc_attempt']
@@ -144,8 +161,7 @@ async def process_results(ctx, task):
     packages = []
     for source_record in task['results']:
         product = _product_row_dict_from_record(source_record, product_columns)
-        for package_record in source_record['packaging']:
-            packages.append(_package_row_dict_from_record(package_record, product, package_columns))
+        packages.extend(_package_rows_from_record(source_record, product, package_columns))
         products.append(product)
     await save_ndc_batch(db, attempt, products, packages)
     enqueue_live_progress(
