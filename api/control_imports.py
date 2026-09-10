@@ -4,7 +4,6 @@ import datetime
 import json
 import os
 import uuid
-from contextlib import suppress
 from typing import Any
 
 import msgpack
@@ -16,8 +15,12 @@ from sqlalchemy.exc import IntegrityError
 from api.control_run_store import insert_import_run, update_import_run_after_enqueue
 from db.models import db
 from process.import_status_events import enqueue_status_event
-from process.live_progress import (enqueue_live_progress, estimate_payload_from_live, progress_payload_from_live,
-                                   read_live_progress)
+from process.live_progress import (
+    enqueue_live_progress,
+    estimate_payload_from_live,
+    progress_payload_from_live,
+    read_live_progress,
+)
 from process.redis_config import redis_dsn, redis_settings
 
 ENGINE_NAME = "drug-api"

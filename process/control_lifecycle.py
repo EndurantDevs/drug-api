@@ -14,7 +14,11 @@ from sqlalchemy import text
 
 from db.models import db
 from process.import_status_events import enqueue_status_event, flush_status_events
-from process.live_progress import enqueue_live_progress, reset_live_progress_context, set_live_progress_context
+from process.live_progress import (
+    enqueue_live_progress,
+    reset_live_progress_context,
+    set_live_progress_context,
+)
 
 
 @dataclass(frozen=True)

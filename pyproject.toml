@@ -58,8 +58,7 @@ test = [
 dev = [
     { include-group = "test" },
     "coverage==7.16.0",
-    "flake8==7.3.0",
-    "isort==9.0.1",
+    "ruff==0.16.6",
     "pip-audit==2.10.1",
     "pylint==4.0.8",
 ]
@@ -68,3 +67,15 @@ dev = [
 package = false
 no-build = true
 required-version = "==0.12.12"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E9", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

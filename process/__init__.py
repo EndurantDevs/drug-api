@@ -8,14 +8,18 @@ import uvloop
 from db.connection import init_db
 from db.models import db
 from process.control_lifecycle import control_single_job_start
-from process.drug_indications import import_drug_indications
+from process.drug_indications import import_drug_indications as import_drug_indications
 from process.drug_indications import main as initiate_drug_indications_import
-from process.label import download_label_content, init_label_file, label_shutdown, label_startup
+from process.label import (
+    download_label_content,
+    init_label_file,
+    label_shutdown,
+    label_startup,
+    process_label_results,
+)
 from process.label import main as initiate_label_import
-from process.label import process_label_results
-from process.ndc_product import init_file
+from process.ndc_product import init_file, shutdown, startup
 from process.ndc_product import main as initiate_product_import
-from process.ndc_product import shutdown, startup
 from process.redis_config import redis_settings
 
 uvloop.install()

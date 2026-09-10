@@ -16,7 +16,13 @@ from process.import_status_events import enqueue_status_event
 from process.live_progress import enqueue_live_progress
 from process.ndc_acquire import acquire_ndc_manifest, consume_ndc_partitions
 from process.ndc_publish import publish_ndc_tables
-from process.ndc_stage import create_ndc_stages, discard_ndc_stages, fail_ndc_attempt, new_ndc_attempt, save_ndc_batch
+from process.ndc_stage import (
+    create_ndc_stages,
+    discard_ndc_stages,
+    fail_ndc_attempt,
+    new_ndc_attempt,
+    save_ndc_batch,
+)
 from process.redis_config import redis_settings
 
 logger = logging.getLogger(__name__)

@@ -1,13 +1,12 @@
 from pathlib import Path
 
 import click
-from dotenv import load_dotenv
-
 from alembic.command import current as show_current
 from alembic.command import downgrade as make_downgrade
 from alembic.command import history as show_history
 from alembic.command import revision, upgrade
 from alembic.config import Config
+from dotenv import load_dotenv
 
 BASE_DIR = (Path(__file__).parent / '..').absolute()
 ALEMBIC_INI = BASE_DIR / 'alembic.ini'
