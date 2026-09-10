@@ -1,5 +1,5 @@
-from copy import deepcopy
 import datetime
+from copy import deepcopy
 from itertools import permutations
 
 import pytest
