@@ -81,6 +81,16 @@ def test_event_style_errors_report_trusted_label(tmp_path, capsys):
     assert "update stuff" not in output
 
 
+def test_unsupported_type_diagnostic_is_redacted(capsys):
+    module = load_policy_module()
+    rejected = "sampleprivateclient"
+
+    assert module.main(["--message", f"{rejected}: preserve behavior"]) == 1
+    output = capsys.readouterr().out
+    assert "unsupported commit type" in output
+    assert rejected not in output
+
+
 @pytest.mark.parametrize("option", ["--message", "--last", "--range"])
 def test_full_messages_are_checked_before_style_output(monkeypatch, capsys, option):
     module = load_policy_module()

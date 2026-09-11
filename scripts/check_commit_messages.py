@@ -87,7 +87,7 @@ def validate_subject(subject: str) -> list[str]:
     commit_type = match.group("type")
     summary = match.group("summary")
     if commit_type not in ALLOWED_TYPES:
-        problems.append(f"unsupported type '{commit_type}'")
+        problems.append("unsupported commit type")
     if vague_summary_key(summary) in VAGUE_SUMMARIES:
         problems.append("summary is too vague")
     return problems
