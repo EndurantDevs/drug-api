@@ -43,7 +43,7 @@ jobs:
     outputs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
     env:
-      CI_REVISION: 900defb8ec00867b84f876e5fbc294258baf523d
+      CI_REVISION: a6b610021819080951e1da0e408f1c33a3738223
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -51,7 +51,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 900defb8ec00867b84f876e5fbc294258baf523d
+        ref: a6b610021819080951e1da0e408f1c33a3738223
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -120,7 +120,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: 900defb8ec00867b84f876e5fbc294258baf523d
+      CI_REVISION: a6b610021819080951e1da0e408f1c33a3738223
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -128,7 +128,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 900defb8ec00867b84f876e5fbc294258baf523d
+        ref: a6b610021819080951e1da0e408f1c33a3738223
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -187,14 +187,14 @@ jobs:
       actions: read
       packages: write
     env:
-      CI_REVISION: 900defb8ec00867b84f876e5fbc294258baf523d
+      CI_REVISION: a6b610021819080951e1da0e408f1c33a3738223
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
     - name: Check out trusted image publisher
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 900defb8ec00867b84f876e5fbc294258baf523d
+        ref: a6b610021819080951e1da0e408f1c33a3738223
         path: ci
         persist-credentials: false
     - name: Authenticate DEV image input
@@ -260,7 +260,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 900defb8ec00867b84f876e5fbc294258baf523d
+        ref: a6b610021819080951e1da0e408f1c33a3738223
         path: ci
         persist-credentials: false
     - name: Remove validated CI intermediates
