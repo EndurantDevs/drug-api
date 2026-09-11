@@ -42,6 +42,7 @@ def test_accepts_clear_commit_subjects(subject):
         "fix(API): handle timeout",
         "fix(api): handle timeout.",
         "fix(api) handle timeout",
+        "fix: " + "x" * 100,
     ],
 )
 def test_rejects_unclear_commit_subjects(subject):
