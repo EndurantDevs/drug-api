@@ -65,7 +65,7 @@ PRIVATE_INTEGRATION_FINGERPRINTS = {
 }
 TEXT_TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 PRIVATE_TEXT_WINDOW_MAX = 3
-INTEGRATION_IDENTIFIER_SEPARATOR_RE = re.compile(r"[-_./:\\]+")
+INTEGRATION_IDENTIFIER_SEPARATOR_RE = re.compile(r"[-_./:\\\s]+")
 
 # Established public compatibility identifiers, matched only as complete tokens.
 # These do not permit private repository names elsewhere in the same text.
@@ -74,7 +74,13 @@ PUBLIC_COMPATIBILITY_IDENTIFIERS = {
     "HP_IMPORT_CONTROL_BASE_URL",
     "HLTHPRT_IMPORT_CONTROL_TOKEN",
     "_import_control_url",
+    "control_imports",
+    "control_lifecycle",
+    "control_run_store",
+    "control_single_job_start",
+    "control_workers",
     "import-control-heartbeat",
+    "process.control_lifecycle",
 }
 PUBLIC_IDENTIFIER_RE = re.compile(
     r"(?<![A-Za-z0-9_./:\\-])(?:"
@@ -139,7 +145,7 @@ def check_paths(paths: list[Path]) -> list[str]:
 def has_private_text_fingerprint(text: str) -> bool:
     """Match private examples without publishing their plaintext in this repository."""
 
-    text = PUBLIC_IDENTIFIER_RE.sub(" ", text)
+    text = PUBLIC_IDENTIFIER_RE.sub("\0", text)
     tokens = list(TEXT_TOKEN_RE.finditer(text))
     for start in range(len(tokens)):
         normalized_window = ""
@@ -280,8 +286,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Run the public repository hygiene checks."""
     args = parse_args(argv)
-    paths = existing_files(repository_files(include_untracked=args.include_untracked))
-    errors = check_paths(paths) + check_content(paths)
+    paths = repository_files(include_untracked=args.include_untracked)
+    errors = check_paths(paths) + check_content(existing_files(paths))
     try:
         errors.extend(check_metadata(args))
     except ValueError as error:

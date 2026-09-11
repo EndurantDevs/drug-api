@@ -49,38 +49,6 @@ def test_rejects_unclear_commit_subjects(subject):
     assert module.validate_subject(subject)
 
 
-def test_reads_push_event_subjects(tmp_path):
-    module = load_policy_module()
-    event_path = tmp_path / "push.json"
-    event_path.write_text(
-        json.dumps(
-            {
-                "commits": [
-                    {"message": "fix(api): handle timeout\n\nBody text."},
-                    {"message": "docs: explain commit style"},
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    assert module.event_subjects(event_path) == [
-        "fix(api): handle timeout",
-        "docs: explain commit style",
-    ]
-
-
-def test_reads_pull_request_title(tmp_path):
-    module = load_policy_module()
-    event_path = tmp_path / "pull_request.json"
-    event_path.write_text(
-        json.dumps({"pull_request": {"title": "ci(commit): add message gate"}}),
-        encoding="utf-8",
-    )
-
-    assert module.event_subjects(event_path) == ["ci(commit): add message gate"]
-
-
 def test_main_accepts_direct_message(capsys):
     module = load_policy_module()
     exit_code = module.main(["--message", "fix(api): handle timeout"])
@@ -94,13 +62,29 @@ def test_main_rejects_unclear_message(capsys):
     exit_code = module.main(["--message", "update stuff"])
 
     assert exit_code
-    assert "policy failed" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "policy failed" in output
+    assert "commit message 1" in output
+    assert "update stuff" not in output
+
+
+def test_event_style_errors_report_trusted_label(tmp_path, capsys):
+    module = load_policy_module()
+    event_path = tmp_path / "pull_request.json"
+    event_path.write_text(json.dumps({"pull_request": {
+        "title": "update stuff", "body": "Public details.", "head": {"ref": "fix/public"},
+    }}), encoding="utf-8")
+
+    assert module.main(["--event", str(event_path)]) == 1
+    output = capsys.readouterr().out
+    assert "PR title" in output
+    assert "update stuff" not in output
 
 
 @pytest.mark.parametrize("option", ["--message", "--last", "--range"])
 def test_full_messages_are_checked_before_style_output(monkeypatch, capsys, option):
     module = load_policy_module()
-    hygiene = importlib.import_module("ci.public_hygiene")
+    hygiene = importlib.import_module("scripts.ci.public_hygiene")
     monkeypatch.setattr(hygiene, "PRIVATE_INTEGRATION_FINGERPRINTS", {hashlib.sha256(b"samplewidget").hexdigest()})
     message = "unclear sample-widget\n\nAdditional detail."
     monkeypatch.setattr(module, "git_messages", lambda arguments: [message])
@@ -114,7 +98,7 @@ def test_full_messages_are_checked_before_style_output(monkeypatch, capsys, opti
 
 def test_event_commit_body_is_checked(monkeypatch, capsys, tmp_path):
     module = load_policy_module()
-    hygiene = importlib.import_module("ci.public_hygiene")
+    hygiene = importlib.import_module("scripts.ci.public_hygiene")
     monkeypatch.setattr(hygiene, "PRIVATE_INTEGRATION_FINGERPRINTS", {hashlib.sha256(b"samplewidget").hexdigest()})
     event = tmp_path / "event.json"
     event.write_text(
@@ -135,7 +119,6 @@ def test_git_messages_preserves_commit_bodies(monkeypatch):
 
     monkeypatch.setattr(module.subprocess, "run", git_output)
     assert module.git_messages(["base..HEAD"]) == [message]
-    assert module.git_subjects(["base..HEAD"]) == ["fix: validate content"]
 
 
 def test_malformed_event_never_echoes_input(capsys, tmp_path):
@@ -158,17 +141,6 @@ def test_invalid_commit_selection_fails_before_read(monkeypatch, capsys, selecto
     assert module.main([selector]) == 2
     output = capsys.readouterr()
     assert selector not in output.out + output.err
-
-
-def test_legacy_subject_helpers_keep_their_contract(monkeypatch):
-    module = load_policy_module()
-    monkeypatch.setattr(module, "event_subjects", lambda path: ["docs: explain policy"])
-    monkeypatch.setattr(module, "git_subjects", lambda arguments: ["fix: preserve full messages"])
-    args = module.parse_args(["--event", "event.json", "--last", "1", "--range", "base..HEAD", "--message", "test: cover input"])
-    assert len(module.cli_subjects(args)) == 4
-    assert module.cli_subjects(module.parse_args([])) == []
-    assert module.push_subjects({"head_commit": {"message": "fix: validate content\n\nBody."}}) == ["fix: validate content"]
-    assert module.validate_subject("fix: " + "x" * 100) == ["subject is longer than 100 characters"]
 
 
 def test_empty_selection_is_reported(capsys):

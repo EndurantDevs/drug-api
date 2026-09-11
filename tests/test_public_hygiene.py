@@ -18,7 +18,10 @@ def synthetic_policy(monkeypatch):
     return hygiene
 
 
-@pytest.mark.parametrize("text", ["sample-widget", "SAMPLE_WIDGET", "https://example.test/sample/widget"])
+@pytest.mark.parametrize(
+    "text",
+    ["sample-widget", "sample widget", "SAMPLE_WIDGET", "https://example.test/sample/widget"],
+)
 def test_fingerprints_normalize_identifier_separators(synthetic_policy, text):
     assert synthetic_policy.check_text(text, "PR body") == ["private-integration-fingerprint: PR body"]
 
@@ -30,6 +33,7 @@ def test_compatibility_exception_is_exact_and_does_not_hide_other_content(synthe
         re.compile(r"(?<![A-Za-z0-9_./:\\-])SAMPLE_WIDGET_URL(?![A-Za-z0-9_./:\\-])"),
     )
     assert synthetic_policy.check_text("`SAMPLE_WIDGET_URL`", "PR body") == []
+    assert synthetic_policy.check_text("sample SAMPLE_WIDGET_URL widget", "PR body") == []
     for text in (
         "SAMPLE_WIDGET_URL and sample-widget",
         "SAMPLE_WIDGET_URL and https://example.test/sample-widget",
@@ -45,6 +49,15 @@ def test_file_diagnostics_never_echo_rejected_names(synthetic_policy, tmp_path):
     errors = synthetic_policy.check_paths([candidate]) + synthetic_policy.check_content([candidate])
     assert errors == ["private-path-fingerprint: file 1", "private-integration-fingerprint: file 1"]
     assert not any(str(candidate) in error or "sample-widget" in error for error in errors)
+
+
+def test_main_checks_non_regular_tracked_paths(monkeypatch, tmp_path, capsys):
+    candidate = tmp_path / ".codex" / "link"
+    monkeypatch.setattr(hygiene, "repository_files", lambda **_: [candidate])
+    monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+
+    assert hygiene.main([]) == 1
+    assert "forbidden path component" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("field", ["title", "body", "ref"])
