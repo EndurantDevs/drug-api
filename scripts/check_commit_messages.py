@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from scripts.ci.public_hygiene import check_text, event_texts
 
 ALLOWED_TYPES = {
     "build",
@@ -86,49 +87,17 @@ def validate_subject(subject: str) -> list[str]:
     commit_type = match.group("type")
     summary = match.group("summary")
     if commit_type not in ALLOWED_TYPES:
-        problems.append(f"unsupported type '{commit_type}'")
+        problems.append("unsupported commit type")
     if vague_summary_key(summary) in VAGUE_SUMMARIES:
         problems.append("summary is too vague")
     return problems
 
 
-def push_subjects(payload: dict[str, Any]) -> list[str]:
-    """Return commit subjects from a GitHub push event payload."""
-    raw_commits = payload.get("commits")
-    commit_list = raw_commits if isinstance(raw_commits, list) else []
-    subject_list = [
-        first_line(str(commit.get("message", "")))
-        for commit in commit_list
-        if isinstance(commit, dict)
-    ]
-    if not subject_list and isinstance(payload.get("head_commit"), dict):
-        subject_list.append(first_line(str(payload["head_commit"].get("message", ""))))
-    return [subject for subject in subject_list if subject]
-
-
-def pull_request_subjects(payload: dict[str, Any]) -> list[str]:
-    """Return the title from a GitHub pull request event payload."""
-    pull_request = payload.get("pull_request")
-    if not isinstance(pull_request, dict):
-        return []
-    title = str(pull_request.get("title", "")).strip()
-    return [title] if title else []
-
-
-def event_subjects(event_path: Path) -> list[str]:
-    """Return subjects to validate from a GitHub event JSON file."""
-    event_payload = json.loads(event_path.read_text(encoding="utf-8"))
-    subject_list = pull_request_subjects(event_payload)
-    if subject_list:
-        return subject_list
-    return push_subjects(event_payload)
-
-
-def git_subjects(arguments: list[str]) -> list[str]:
-    """Return subjects from git log for the given revision arguments."""
-    git_command_parts = ["git", "log", "--format=%s", *arguments]
+def git_messages(arguments: list[str]) -> list[str]:
+    """Return complete commit messages, preserving bodies for publication checks."""
+    git_command_parts = ["git", "log", "--format=%B%x00", *arguments]
     completed = subprocess.run(git_command_parts, check=True, text=True, capture_output=True)
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return [message.strip() for message in completed.stdout.split("\0") if message.strip()]
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -141,23 +110,28 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def cli_subjects(args: argparse.Namespace) -> list[str]:
-    """Return all subjects requested by command line options."""
-    subject_list = [first_line(message) for message in args.message]
-    if args.event:
-        subject_list.extend(event_subjects(args.event))
+def cli_public_texts(args: argparse.Namespace) -> list[tuple[str, str]]:
+    """Collect complete messages and event metadata before any diagnostics."""
+    if args.last is not None and args.last <= 0:
+        raise ValueError("Requested commit count must be positive.")
+    if args.commit_range is not None and (not args.commit_range or args.commit_range.startswith("-")):
+        raise ValueError("Requested revision range must name commits.")
+    message_list = list(args.message)
     if args.last:
-        subject_list.extend(git_subjects([f"-n{args.last}"]))
+        message_list.extend(git_messages([f"-n{args.last}"]))
     if args.commit_range:
-        subject_list.extend(git_subjects([args.commit_range]))
-    return [subject for subject in subject_list if subject]
+        message_list.extend(git_messages([args.commit_range]))
+    text_list = [(f"commit message {index}", message) for index, message in enumerate(message_list, 1)]
+    if args.event:
+        text_list.extend(event_texts(args.event))
+    return text_list
 
 
-def print_problems(problems_by_subject: list[tuple[str, list[str]]]) -> None:
+def print_problems(problems_by_label: list[tuple[str, list[str]]]) -> None:
     """Print validation failures in a CI-friendly format."""
     print("Commit message policy failed:")
-    for subject, problems in problems_by_subject:
-        print(f"  {subject}")
+    for label, problems in problems_by_label:
+        print(f"  {label}")
         for problem in problems:
             print(f"    - {problem}")
     print("\nExpected: type(scope): imperative summary")
@@ -166,21 +140,42 @@ def print_problems(problems_by_subject: list[tuple[str, list[str]]]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the commit message policy check."""
-    args = parse_args(argv or sys.argv[1:])
-    subject_list = cli_subjects(args)
-    if not subject_list:
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    return validate_message_inputs(args)
+
+
+def validate_message_inputs(args: argparse.Namespace) -> int:
+    """Validate full publication content before rendering any subject errors."""
+    try:
+        public_text_pairs = cli_public_texts(args)
+        public_errors = [error for label, text in public_text_pairs for error in check_text(text, label)]
+        if public_errors:
+            print("Public hygiene check failed:")
+            for error in public_errors:
+                print(f"- {error}")
+            return 1
+        labeled_subjects = [
+            (label, first_line(text))
+            for label, text in public_text_pairs
+            if (label == "PR title" or label.startswith(("commit message ", "push commit ")))
+            and first_line(text)
+        ]
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        print("Cannot validate commit messages or event metadata.", file=sys.stderr)
+        return 2
+    if not labeled_subjects:
         print("No commit subjects found to validate.", file=sys.stderr)
         return 2
 
     subject_problem_pairs = [
-        (subject, problems)
-        for subject in subject_list
+        (label, problems)
+        for label, subject in labeled_subjects
         if (problems := validate_subject(subject))
     ]
     if subject_problem_pairs:
         print_problems(subject_problem_pairs)
         return 1
-    print(f"Commit message policy OK ({len(subject_list)} subject(s)).")
+    print(f"Commit message policy OK ({len(labeled_subjects)} subject(s)).")
     return 0
 
 

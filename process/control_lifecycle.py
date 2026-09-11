@@ -45,7 +45,7 @@ class ControlRunTransition:
 
 
 async def control_single_job_start(ctx: dict[str, Any], task: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run one import-control job target and keep import_run state current."""
+    """Run one managed import job target and keep import_run state current."""
     control_task = _control_task_from_payload(ctx, task)
     if not control_task.target_module or not control_task.target_function:
         await mark_control_run(

@@ -6,7 +6,7 @@ from api import control_imports
 from process import import_status_events, live_progress
 
 
-def test_status_event_noops_without_import_control_url(monkeypatch):
+def test_status_event_noops_without_callback_url(monkeypatch):
     monkeypatch.delenv("HLTHPRT_IMPORT_CONTROL_URL", raising=False)
     monkeypatch.delenv("HP_IMPORT_CONTROL_BASE_URL", raising=False)
 
@@ -28,7 +28,7 @@ def test_status_event_throttles_repeated_phase_but_allows_transition(monkeypatch
             queued_events_list.append(item)
 
     fake_queue = FakeQueue()
-    monkeypatch.setenv("HLTHPRT_IMPORT_CONTROL_URL", "http://import-control")
+    monkeypatch.setenv("HLTHPRT_IMPORT_CONTROL_URL", "https://callback.example.test")
     monkeypatch.setattr(import_status_events, "_ensure_queue", lambda _loop: fake_queue)
     monkeypatch.setattr(import_status_events.asyncio, "get_running_loop", lambda: object())
     import_status_events._last_sent_by_run.clear()

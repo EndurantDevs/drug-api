@@ -48,11 +48,11 @@ For production documentation and managed commercial access, see [HealthPorta Doc
 
 HealthPorta can be used as:
 
-- a hosted API layer for current drug reference, NDC, package, and label data
+- a hosted API for current drug reference, NDC, package, and label data
 - an MCP-backed data service for AI agents and internal enterprise workflows
 - a downstream integration point for customer applications, clinical products, and analytics systems that need fresh drug data
 
-For AI-agent connectivity, see [HealthPorta MCP](https://app.healthporta.com/mcp).
+For AI-agent connectivity, see the [MCP integration guide](https://app.healthporta.com/mcp).
 
 ## Local Setup
 Install `uv`, PostgreSQL 18 and Redis 7. The project accepts Python 3.14 or

@@ -1,4 +1,4 @@
-"""Database writes for import-control run records."""
+"""Database writes for managed import run records."""
 
 import json
 from typing import Any
