@@ -17,4 +17,5 @@
 
 ## Public Repo Hygiene
 
-- [ ] No private runbooks, agent instructions, tokens, or internal hostnames added.
+- [ ] Reviewed files, branch names, full commit messages, title, description, comments, and validation artifacts for public suitability.
+- [ ] References are confirmed public; no private project names, configuration details, hostnames, local paths, credentials, or personal data included.

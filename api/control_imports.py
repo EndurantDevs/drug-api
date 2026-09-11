@@ -65,7 +65,7 @@ _IMPORTERS: dict[str, dict[str, Any]] = {
 
 
 def utc_now() -> datetime.datetime:
-    """Return the current UTC timestamp for import-control records."""
+    """Return the current UTC timestamp for import records."""
     return datetime.datetime.utcnow()
 
 
@@ -114,7 +114,7 @@ async def ensure_import_run_table() -> None:
 
 
 def importer_registry() -> list[dict[str, Any]]:
-    """Return importers this service can expose to import-control clients."""
+    """Return importers this service can expose to control clients."""
     return [
         {
             "name": name,

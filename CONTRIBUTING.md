@@ -40,8 +40,33 @@ Use `type/short-slug` names: `feature/<slug>`, `fix/<slug>`,
 ## Commit Messages
 
 Use the style in [docs/commit-messages.md](docs/commit-messages.md). Run
-`uv run --locked python scripts/check_commit_messages.py --last 1` before pushing
+`uv run --locked python scripts/check_commit_messages.py --range origin/dev..HEAD` before pushing
 hand-written commits.
+
+## Public content
+
+Review the exact files, branch names, commit subjects and bodies, pull request
+titles and descriptions, comments, reviews, releases, check summaries, logs, and
+artifacts before publication or editing. Describe public code, behavior, and
+validation using synthetic examples. Verify that referenced repositories and
+resources are public; omit private project names, configuration details,
+hostnames, local paths, credentials, and personal or customer data. Prior
+publication does not establish permission to repeat a detail.
+
+Run the focused check on proposed text and candidate files:
+
+```bash
+uv run --locked python scripts/ci/public_hygiene.py --include-untracked \
+  --text-file proposed-title.txt --text-file proposed-description.txt
+uv run --locked python scripts/check_commit_messages.py --range origin/dev..HEAD
+```
+
+The check also validates pull request metadata and push messages in the CI event.
+It detects known patterns; a passing result does not establish that every
+reference is public. Manually inspect the remaining content and re-read the
+published result after each write. Correct editable disclosures without
+repeating the removed material in a comment. Keep private reference inventories
+outside the repository.
 
 ## Tests
 

@@ -11,6 +11,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ci.public_hygiene import check_text, event_texts
+
 ALLOWED_TYPES = {
     "build",
     "chore",
@@ -126,9 +129,14 @@ def event_subjects(event_path: Path) -> list[str]:
 
 def git_subjects(arguments: list[str]) -> list[str]:
     """Return subjects from git log for the given revision arguments."""
-    git_command_parts = ["git", "log", "--format=%s", *arguments]
+    return [first_line(message) for message in git_messages(arguments) if first_line(message)]
+
+
+def git_messages(arguments: list[str]) -> list[str]:
+    """Return complete commit messages, preserving bodies for publication checks."""
+    git_command_parts = ["git", "log", "--format=%B%x00", *arguments]
     completed = subprocess.run(git_command_parts, check=True, text=True, capture_output=True)
-    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return [message.strip() for message in completed.stdout.split("\0") if message.strip()]
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -153,6 +161,23 @@ def cli_subjects(args: argparse.Namespace) -> list[str]:
     return [subject for subject in subject_list if subject]
 
 
+def cli_public_texts(args: argparse.Namespace) -> list[tuple[str, str]]:
+    """Collect complete messages and event metadata before any diagnostics."""
+    if args.last is not None and args.last <= 0:
+        raise ValueError("Requested commit count must be positive.")
+    if args.commit_range is not None and (not args.commit_range or args.commit_range.startswith("-")):
+        raise ValueError("Requested revision range must name commits.")
+    message_list = list(args.message)
+    if args.last:
+        message_list.extend(git_messages([f"-n{args.last}"]))
+    if args.commit_range:
+        message_list.extend(git_messages([args.commit_range]))
+    text_list = [(f"commit message {index}", message) for index, message in enumerate(message_list, 1)]
+    if args.event:
+        text_list.extend(event_texts(args.event))
+    return text_list
+
+
 def print_problems(problems_by_subject: list[tuple[str, list[str]]]) -> None:
     """Print validation failures in a CI-friendly format."""
     print("Commit message policy failed:")
@@ -166,8 +191,29 @@ def print_problems(problems_by_subject: list[tuple[str, list[str]]]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the commit message policy check."""
-    args = parse_args(argv or sys.argv[1:])
-    subject_list = cli_subjects(args)
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    return validate_message_inputs(args)
+
+
+def validate_message_inputs(args: argparse.Namespace) -> int:
+    """Validate full publication content before rendering any subject errors."""
+    try:
+        public_text_pairs = cli_public_texts(args)
+        public_errors = [error for label, text in public_text_pairs for error in check_text(text, label)]
+        if public_errors:
+            print("Public hygiene check failed:")
+            for error in public_errors:
+                print(f"- {error}")
+            return 1
+        subject_list = [
+            first_line(text)
+            for label, text in public_text_pairs
+            if (label == "PR title" or label.startswith(("commit message ", "push commit ")))
+            and first_line(text)
+        ]
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        print("Cannot validate commit messages or event metadata.", file=sys.stderr)
+        return 2
     if not subject_list:
         print("No commit subjects found to validate.", file=sys.stderr)
         return 2
