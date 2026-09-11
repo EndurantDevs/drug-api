@@ -88,8 +88,8 @@ PUBLIC_IDENTIFIER_RE = re.compile(
     + r")(?![A-Za-z0-9_./:\\-])"
 )
 
-PATTERN_EXEMPT_PATHS = {
-    "scripts/ci/public_hygiene.py",
+PATTERN_EXEMPTIONS = {
+    "scripts/ci/public_hygiene.py": {"agentic-development-reference"},
 }
 PUBLIC_EVENT_NAMES = {"pull_request", "pull_request_target", "push"}
 
@@ -172,13 +172,14 @@ def has_private_text_fingerprint(text: str) -> bool:
     return False
 
 
-def check_text(text: str, label: str, *, check_patterns: bool = True) -> list[str]:
+def check_text(
+    text: str, label: str, *, exempt_patterns: frozenset[str] | set[str] = frozenset()
+) -> list[str]:
     """Check text using a trusted field label without echoing rejected content."""
     errors = []
-    if check_patterns:
-        for category, pattern in CONTENT_PATTERNS.items():
-            if pattern.search(text):
-                errors.append(f"{category}: {label}")
+    for category, pattern in CONTENT_PATTERNS.items():
+        if category not in exempt_patterns and pattern.search(text):
+            errors.append(f"{category}: {label}")
     if has_private_text_fingerprint(text):
         errors.append(f"private-integration-fingerprint: {label}")
     return errors
@@ -195,9 +196,13 @@ def check_content(paths: list[Path]) -> list[str]:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
-        errors.extend(check_text(
-            text, f"file {index}", check_patterns=path_str not in PATTERN_EXEMPT_PATHS,
-        ))
+        errors.extend(
+            check_text(
+                text,
+                f"file {index}",
+                exempt_patterns=PATTERN_EXEMPTIONS.get(path_str, frozenset()),
+            )
+        )
     return errors
 
 

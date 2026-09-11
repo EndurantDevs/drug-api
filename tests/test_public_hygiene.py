@@ -172,14 +172,44 @@ def test_prepared_text_rejects_binary_content(monkeypatch, tmp_path, contents):
 
 def test_file_patterns_and_exemptions_remain_scoped(synthetic_policy, monkeypatch, tmp_path):
     candidate = tmp_path / "candidate.txt"
-    monkeypatch.setattr(synthetic_policy, "CONTENT_PATTERNS", {"sample-pattern": re.compile("sample-marker")})
-    candidate.write_text("sample-marker sample-widget", encoding="utf-8")
+    monkeypatch.setattr(
+        synthetic_policy,
+        "CONTENT_PATTERNS",
+        {
+            "sample-pattern": re.compile("sample-marker"),
+            "github-token": hygiene.CONTENT_PATTERNS["github-token"],
+            "database-url-with-password": hygiene.CONTENT_PATTERNS["database-url-with-password"],
+            "password-assignment": hygiene.CONTENT_PATTERNS["password-assignment"],
+        },
+    )
+    candidate.write_text(
+        "sample-marker sample-widget\n"
+        + "ghp_"
+        + "a" * 20
+        + "\npostgresql://user:"
+        + "credential@example.test/db\n"
+        + "pass"
+        + "word='credential'",
+        encoding="utf-8",
+    )
     assert synthetic_policy.check_content([candidate]) == [
         "sample-pattern: file 1",
+        "github-token: file 1",
+        "database-url-with-password: file 1",
+        "password-assignment: file 1",
         "private-integration-fingerprint: file 1",
     ]
-    monkeypatch.setattr(synthetic_policy, "PATTERN_EXEMPT_PATHS", {candidate.as_posix()})
-    assert synthetic_policy.check_content([candidate]) == ["private-integration-fingerprint: file 1"]
+    monkeypatch.setattr(
+        synthetic_policy,
+        "PATTERN_EXEMPTIONS",
+        {candidate.as_posix(): {"sample-pattern"}},
+    )
+    assert synthetic_policy.check_content([candidate]) == [
+        "github-token: file 1",
+        "database-url-with-password: file 1",
+        "password-assignment: file 1",
+        "private-integration-fingerprint: file 1",
+    ]
     candidate.write_bytes(b"\0binary")
     assert synthetic_policy.check_content([candidate]) == []
     candidate.write_bytes(b"\xff")
