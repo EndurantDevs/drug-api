@@ -30,17 +30,25 @@ from tests.process.test_ndc_publication_proof_postgres import (
 
 
 async def _handoff(case):
-    return await ndc_publish.publish_ndc_tables(case.database, case.schema, case.attempt.suffix,
-                                               attempt=case.attempt, acquisition=_acquisition(case),
-                                               publication_mode="handoff")
+    return await ndc_publish.publish_ndc_tables(
+        case.database,
+        case.schema,
+        case.attempt.suffix,
+        attempt=case.attempt,
+        acquisition=_acquisition(case),
+        publication_mode="handoff",
+    )
 
 
 async def _coordinator_case(case, monkeypatch):
     run_id = "synthetic-worker-" + uuid4().hex
-    await case.database.status(f"""
+    await case.database.status(
+        f"""
         INSERT INTO {case.schema}.import_run (run_id, engine, importer, status, import_id)
         VALUES (:run_id, 'drug-api', 'ndc', 'queued', 'synthetic-source')
-    """, run_id=run_id)
+    """,
+        run_id=run_id,
+    )
     for module in (ndc_product, control_lifecycle, control_imports):
         monkeypatch.setattr(module, "db", case.database)
     events = []
@@ -56,12 +64,23 @@ async def _coordinator_case(case, monkeypatch):
 
 
 async def _run_worker(run_id, monkeypatch):
-    task_dict = {"run_id": run_id, "importer": "ndc", "target_module": "process.ndc_product",
-                 "target_function": "init_file", "call_style": "ctx_task", "task": {}}
+    task_dict = {
+        "run_id": run_id,
+        "importer": "ndc",
+        "target_module": "process.ndc_product",
+        "target_function": "init_file",
+        "call_style": "ctx_task",
+        "task": {},
+    }
     pipeline = MagicMock()
     pipeline.__aenter__.return_value = pipeline
-    pipeline.execute = AsyncMock(return_value=[serialize_job(
-        "control_single_job_start", (task_dict,), {}, None, 0, serializer=NDC.job_serializer), 1, True])
+    pipeline.execute = AsyncMock(
+        return_value=[
+            serialize_job("control_single_job_start", (task_dict,), {}, None, 0, serializer=NDC.job_serializer),
+            1,
+            True,
+        ]
+    )
     redis = MagicMock()
     redis.pipeline.return_value = pipeline
     worker = create_worker(NDC, redis_pool=redis, handle_signals=False, keep_result=60)
@@ -87,8 +106,15 @@ async def test_worker_handoff_is_durable_and_nonterminal(publication_case, monke
     with pytest.raises(RuntimeError, match="No SQLAlchemy session"):
         current_session()
     async with case.database.engine.connect() as independent:
-        run = (await independent.exec_driver_sql(
-            f"SELECT * FROM {case.schema}.import_run WHERE run_id='{coordinator.run_id}'")).mappings().one()
+        run = (
+            (
+                await independent.exec_driver_sql(
+                    f"SELECT * FROM {case.schema}.import_run WHERE run_id='{coordinator.run_id}'"
+                )
+            )
+            .mappings()
+            .one()
+        )
     assert run["status"] == "finalizing" and run["finished_at"] is None and run["import_id"] == "synthetic-source"
     assert run["metrics"]["ndc_handoff"] == receipt and "ndc_publication" not in run["metrics"]
     assert await _pair_state(case) == before and await _pair_state(case, "_old") == previous
@@ -102,7 +128,9 @@ async def test_worker_handoff_is_durable_and_nonterminal(publication_case, monke
     assert all(event["status"] != "succeeded" for event in coordinator.events)
     assert coordinator.events[-1]["status"] == "finalizing"
     monkeypatch.setattr(control_imports, "read_live_progress", lambda _run: pytest.fail("stale handoff overlay"))
-    assert (await control_imports.get_import_run(coordinator.run_id))["phase_detail"] == "ndc stages awaiting publication"
+    assert (await control_imports.get_import_run(coordinator.run_id))[
+        "phase_detail"
+    ] == "ndc stages awaiting publication"
     assert len(coordinator.temporary_paths) == 3 and all(not path.exists() for path in coordinator.temporary_paths)
 
 
@@ -113,12 +141,19 @@ async def test_handoff_retains_stages_against_old_worker(publication_case, later
     await _save_one(case)
     receipt = await _handoff(case)
     if later_state == "missing":
-        await case.database.status(f"DELETE FROM {case.schema}.import_run WHERE run_id=:run_id", run_id=case.attempt.run_id)
+        await case.database.status(
+            f"DELETE FROM {case.schema}.import_run WHERE run_id=:run_id", run_id=case.attempt.run_id
+        )
     elif later_state == "comment":
-        await case.database.status(f"COMMENT ON TABLE {case.schema}.product_{case.attempt.suffix} IS 'synthetic consumer'")
+        await case.database.status(
+            f"COMMENT ON TABLE {case.schema}.product_{case.attempt.suffix} IS 'synthetic consumer'"
+        )
     else:
-        await case.database.status(f"UPDATE {case.schema}.import_run SET status=:status WHERE run_id=:run_id",
-                                   status=later_state, run_id=case.attempt.run_id)
+        await case.database.status(
+            f"UPDATE {case.schema}.import_run SET status=:status WHERE run_id=:run_id",
+            status=later_state,
+            run_id=case.attempt.run_id,
+        )
         # The durable transfer still fences an old worker if comments are reset.
         for table in case.attempt.tables.values():
             await ndc_stage._comment_ndc_table(case.database, case.schema, table.name, case.attempt.owner_comment)
@@ -182,8 +217,9 @@ async def test_lost_commit_ack_preserves_handoff(publication_case, monkeypatch):
     monkeypatch.setattr(case.database, "transaction", lose_commit_ack)
     with pytest.raises(ConnectionError, match="acknowledgement"):
         await ndc_product.init_file({}, {"run_id": coordinator.run_id})
-    run = await case.database.first(f"SELECT * FROM {case.schema}.import_run WHERE run_id=:run_id",
-                                    run_id=coordinator.run_id)
+    run = await case.database.first(
+        f"SELECT * FROM {case.schema}.import_run WHERE run_id=:run_id", run_id=coordinator.run_id
+    )
     receipt = run["metrics"]["ndc_handoff"]
     assert run["status"] == "finalizing" and run["finished_at"] is None
     assert ndc_handoff.has_valid_ndc_handoff(receipt, coordinator.run_id)
@@ -222,8 +258,13 @@ async def test_handoff_wins_waiting_worker_race(publication_case, monkeypatch, a
     try:
         async with asyncio.timeout(8):
             await ready.wait()
-            pending_tasks.append(asyncio.create_task(
-                _save_one(case, 2) if action == "save" else ndc_stage.discard_ndc_stages(case.database, case.attempt)))
+            pending_tasks.append(
+                asyncio.create_task(
+                    _save_one(case, 2)
+                    if action == "save"
+                    else ndc_stage.discard_ndc_stages(case.database, case.attempt)
+                )
+            )
             await _wait_for_stage_waiter(case)
             release.set()
             outcomes = await asyncio.gather(*pending_tasks, return_exceptions=True)
@@ -300,11 +341,13 @@ async def test_commit_delay_expires_before_announcement(publication_case, monkey
         with pytest.raises(TimeoutError):
             await ndc_product.init_file({}, {"run_id": coordinator.run_id})
     assert delay_state.has_delayed
-    run = await case.database.first(f"SELECT * FROM {case.schema}.import_run WHERE run_id=:run_id",
-                                    run_id=coordinator.run_id)
+    run = await case.database.first(
+        f"SELECT * FROM {case.schema}.import_run WHERE run_id=:run_id", run_id=coordinator.run_id
+    )
     assert run["status"] == "failed" and "ndc_handoff" not in run["metrics"]
     assert await ndc_stage.ndc_table_oids(case.database, case.schema, run["metrics"]["ndc_attempt_id"]) == {
-        "product": None, "package": None,
+        "product": None,
+        "package": None,
     }
     assert await _pair_state(case) == before
     assert not any(event["status"] in {"succeeded", "finalizing"} for event in coordinator.events)
@@ -319,8 +362,15 @@ async def test_reader_hands_off_beside_protected_views(publication_case, monkeyp
               FROM pg_roles WHERE rolname=current_user
         """)
         assert identity["rolname"] == reader.reader_name
-        assert not any(identity[key] for key in ("rolsuper", "rolcreaterole", "rolcreatedb", "rolreplication", "rolbypassrls"))
-        assert await reader.database.scalar("SELECT count(*) FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=current_user)") == 0
+        assert not any(
+            identity[key] for key in ("rolsuper", "rolcreaterole", "rolcreatedb", "rolreplication", "rolbypassrls")
+        )
+        assert (
+            await reader.database.scalar(
+                "SELECT count(*) FROM pg_auth_members WHERE member=(SELECT oid FROM pg_roles WHERE rolname=current_user)"
+            )
+            == 0
+        )
         for statement in (
             f"ALTER VIEW {case.schema}.product RENAME TO forbidden_product",
             f"UPDATE {case.schema}.product SET brand_name='forbidden'",
@@ -341,9 +391,12 @@ async def test_reader_hands_off_beside_protected_views(publication_case, monkeyp
         assert await _pair_state(case, "_generation") == before
         assert await ndc_stage.ndc_table_oids(reader.database, case.schema) == view_oids
         assert worker_result["result"]["incumbent_oids"] == view_oids
-        owners = await case.database.all("""
+        owners = await case.database.all(
+            """
             SELECT c.relname, r.rolname FROM pg_class c JOIN pg_roles r ON r.oid=c.relowner
              JOIN pg_namespace n ON n.oid=c.relnamespace
              WHERE n.nspname=:schema AND c.relname IN ('product','package','product_generation','package_generation')
-        """, schema=case.schema)
+        """,
+            schema=case.schema,
+        )
         assert len(owners) == 4 and all(entry["rolname"] == reader.owner_name for entry in owners)

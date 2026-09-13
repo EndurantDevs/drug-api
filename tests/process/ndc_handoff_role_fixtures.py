@@ -22,7 +22,9 @@ async def _protect_canonical_pair(case, owner_name, reader_name):
         columns = ", ".join('"' + column.name + '"' for column in model.__table__.columns)
         await case.database.status(f"ALTER TABLE {case.schema}.{name} RENAME TO {name}_generation")
         await case.database.status(f"ALTER TABLE {case.schema}.{name}_generation OWNER TO {owner_name}")
-        await case.database.status(f"CREATE VIEW {case.schema}.{name} AS SELECT {columns} FROM {case.schema}.{name}_generation")
+        await case.database.status(
+            f"CREATE VIEW {case.schema}.{name} AS SELECT {columns} FROM {case.schema}.{name}_generation"
+        )
         await case.database.status(f"ALTER VIEW {case.schema}.{name} OWNER TO {owner_name}")
         await case.database.status(f"GRANT SELECT ON {case.schema}.{name} TO {reader_name}")
     await case.database.status(f"""
@@ -45,8 +47,10 @@ async def handoff_reader_case(case, monkeypatch):
         for role_name in (owner_name, reader_name):
             cleanup.push_async_callback(_drop_role, case.database, role_name)
             login = "NOLOGIN" if role_name == owner_name else "LOGIN"
-            await case.database.status(f"CREATE ROLE {role_name} {login} NOINHERIT NOSUPERUSER NOCREATEDB "
-                                       "NOCREATEROLE NOREPLICATION NOBYPASSRLS")
+            await case.database.status(
+                f"CREATE ROLE {role_name} {login} NOINHERIT NOSUPERUSER NOCREATEDB "
+                "NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+            )
         cleanup.push_async_callback(_drop_schema, case.database, case.schema)
         await _protect_canonical_pair(case, owner_name, reader_name)
         monkeypatch.setenv("HLTHPRT_DB_USER", reader_name)

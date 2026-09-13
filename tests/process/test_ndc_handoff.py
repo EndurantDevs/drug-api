@@ -14,23 +14,54 @@ def handoff_receipt():
     """Return a complete synthetic receipt with its canonical candidate digest."""
     attempt_id = "n" + "a" * 32
     receipt_dict = {
-        "format": ndc_handoff.HANDOFF_FORMAT, "run_id": "synthetic-run", "attempt_id": attempt_id,
-        "schema": "synthetic_ndc", "database_oid": 10, "import_run_oid": 11,
-        "complete": True, "published": False, "handed_off_at": "2026-01-01T00:00:00+00:00",
+        "format": ndc_handoff.HANDOFF_FORMAT,
+        "run_id": "synthetic-run",
+        "attempt_id": attempt_id,
+        "schema": "synthetic_ndc",
+        "database_oid": 10,
+        "import_run_oid": 11,
+        "complete": True,
+        "published": False,
+        "handed_off_at": "2026-01-01T00:00:00+00:00",
         "acquisition": {"complete": True},
         "counts": {"source_products": 1, "source_packages": 1, "product": 1, "package": 1, "batches": 1},
         "incumbent_oids": {"product": 21, "package": None},
-        "tables": {name: {"name": f"{name}_{attempt_id}", "oid": identity, "row_count": 1,
-                           "size_bytes": 4, "sha256": "b" * 64, "encoding": "postgres-copy-csv-v1",
-                           "columns": [{"name": "key", "type": "text", "not_null": True}]}
-                   for name, identity in (("product", 31), ("package", 32))},
+        "tables": {
+            name: {
+                "name": f"{name}_{attempt_id}",
+                "oid": identity,
+                "row_count": 1,
+                "size_bytes": 4,
+                "sha256": "b" * 64,
+                "encoding": "postgres-copy-csv-v1",
+                "columns": [{"name": "key", "type": "text", "not_null": True}],
+            }
+            for name, identity in (("product", 31), ("package", 32))
+        },
     }
     receipt_dict["handoff_sha256"] = ndc_handoff._candidate_digest(receipt_dict)
     return receipt_dict
 
 
-@pytest.mark.parametrize("corruption", ["none", "run", "attempt", "format", "published", "complete",
-                                       "name", "oid", "pair", "count", "column", "timestamp", "digest", "extra"])
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "none",
+        "run",
+        "attempt",
+        "format",
+        "published",
+        "complete",
+        "name",
+        "oid",
+        "pair",
+        "count",
+        "column",
+        "timestamp",
+        "digest",
+        "extra",
+    ],
+)
 def test_receipt_classification_is_exact(corruption):
     receipt_dict = handoff_receipt()
     mutations_by_name = {
@@ -60,8 +91,10 @@ def test_partial_receipts_are_not_handoffs(receipt):
     assert not ndc_handoff.has_valid_ndc_handoff(receipt, "synthetic-run")
 
 
-@pytest.mark.parametrize("mode,is_sample,refused", [("native", False, False), ("handoff", True, False),
-                                                   ("handoff", False, True), ("other", False, True)])
+@pytest.mark.parametrize(
+    "mode,is_sample,refused",
+    [("native", False, False), ("handoff", True, False), ("handoff", False, True), ("other", False, True)],
+)
 @pytest.mark.asyncio
 async def test_entry_refuses_borrowed_session_before_acquisition(monkeypatch, mode, is_sample, refused):
     monkeypatch.setenv("HLTHPRT_NDC_PUBLICATION_MODE", mode)
@@ -80,8 +113,14 @@ async def test_publish_refuses_borrowed_session_before_ddl(monkeypatch):
     monkeypatch.setattr(ndc_handoff, "current_session", lambda: object())
     database = SimpleNamespace(status=AsyncMock())
     with pytest.raises(RuntimeError, match="unbound"):
-        await ndc_publish.publish_ndc_tables(database, "synthetic_ndc", "attempt",
-                                            attempt=object(), acquisition={"complete": True}, publication_mode="handoff")
+        await ndc_publish.publish_ndc_tables(
+            database,
+            "synthetic_ndc",
+            "attempt",
+            attempt=object(),
+            acquisition={"complete": True},
+            publication_mode="handoff",
+        )
     database.status.assert_not_awaited()
 
 
@@ -97,9 +136,14 @@ async def test_unowned_or_unknown_publication_refuses_before_ddl(mode):
 @pytest.mark.parametrize("kind", ["handoff", "wrong-run", "wrong-attempt", "running", "other-importer", "malformed"])
 def test_durable_handoff_ignores_stale_progress(monkeypatch, kind):
     receipt_dict = handoff_receipt()
-    run_dict = {"run_id": "synthetic-run", "importer": "ndc", "status": "finalizing",
-                "phase_detail": "ndc stages awaiting publication", "progress": {"message": "awaiting publication"},
-                "metrics": {"ndc_attempt_id": receipt_dict["attempt_id"], "ndc_handoff": receipt_dict}}
+    run_dict = {
+        "run_id": "synthetic-run",
+        "importer": "ndc",
+        "status": "finalizing",
+        "phase_detail": "ndc stages awaiting publication",
+        "progress": {"message": "awaiting publication"},
+        "metrics": {"ndc_attempt_id": receipt_dict["attempt_id"], "ndc_handoff": receipt_dict},
+    }
     if kind == "wrong-run":
         run_dict["run_id"] = "another-run"
     if kind == "wrong-attempt":
@@ -114,7 +158,9 @@ def test_durable_handoff_ignores_stale_progress(monkeypatch, kind):
     monkeypatch.setattr(control_imports, "read_live_progress", reader)
     result_dict = control_imports._overlay_live_progress(run_dict)
     assert result_dict["status"] == run_dict["status"]
-    assert result_dict["phase_detail"] == ("ndc stages awaiting publication" if kind == "handoff" else "stale acquisition")
+    assert result_dict["phase_detail"] == (
+        "ndc stages awaiting publication" if kind == "handoff" else "stale acquisition"
+    )
     assert reader.call_count == int(kind != "handoff")
 
 
