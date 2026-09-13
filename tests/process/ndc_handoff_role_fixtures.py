@@ -43,10 +43,11 @@ async def handoff_reader_case(case, monkeypatch):
     """Own each exact temporary role, schema and reader pool before creating it."""
     owner_name = "ndc_owner_" + uuid4().hex
     reader_name = "ndc_reader_" + uuid4().hex
+    reader_password = uuid4().hex
     async with AsyncExitStack() as cleanup:
         for role_name in (owner_name, reader_name):
             cleanup.push_async_callback(_drop_role, case.database, role_name)
-            login = "NOLOGIN" if role_name == owner_name else "LOGIN"
+            login = "NOLOGIN" if role_name == owner_name else f"LOGIN PASSWORD '{reader_password}'"
             await case.database.status(
                 f"CREATE ROLE {role_name} {login} NOINHERIT NOSUPERUSER NOCREATEDB "
                 "NOCREATEROLE NOREPLICATION NOBYPASSRLS"
@@ -55,6 +56,8 @@ async def handoff_reader_case(case, monkeypatch):
         await _protect_canonical_pair(case, owner_name, reader_name)
         monkeypatch.setenv("HLTHPRT_DB_USER", reader_name)
         monkeypatch.setenv("DB_USER", reader_name)
+        monkeypatch.setenv("HLTHPRT_DB_PASSWORD", reader_password)
+        monkeypatch.setenv("DB_PASSWORD", reader_password)
         reader = Database()
         cleanup.push_async_callback(reader.disconnect)
         await reader.connect()
