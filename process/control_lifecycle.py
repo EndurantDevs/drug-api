@@ -19,6 +19,7 @@ from process.live_progress import (
     reset_live_progress_context,
     set_live_progress_context,
 )
+from process.ndc_handoff import has_valid_ndc_handoff
 
 
 @dataclass(frozen=True)
@@ -377,6 +378,9 @@ async def ensure_import_run_table() -> None:
 
 def _native_result_status(control_task: ControlTask, result: Any) -> str:
     """Reflect the NDC coordinator's already-committed native terminal result."""
+    if (control_task.target_module == "process.ndc_product" and control_task.target_function == "init_file"
+            and control_task.importer == "ndc" and has_valid_ndc_handoff(result, control_task.run_id)):
+        return "finalizing"
     if (control_task.target_module == "process.ndc_product" and isinstance(result, dict)
             and result.get("format") == "ndc-publication-v1" and result.get("run_id") == control_task.run_id):
         return "succeeded"

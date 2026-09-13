@@ -48,20 +48,24 @@ async def test_staging_checks_exact_physical_owner_and_active_run(monkeypatch, g
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("guard", ["valid", "busy", "incumbent"])
-async def test_live_publication_uses_nonwaiting_lock_and_exact_predecessor(monkeypatch, guard):
+@pytest.mark.parametrize("is_handoff", [False, True])
+async def test_live_publication_uses_nonwaiting_lock_and_exact_predecessor(monkeypatch, guard, is_handoff):
     attempt = _attempt()
     database = SimpleNamespace(status=AsyncMock(), scalar=AsyncMock(return_value=guard != "busy"))
     monkeypatch.setattr(ndc_stage, "ndc_table_oids", AsyncMock(return_value={} if guard == "incumbent" else attempt.incumbent_oids))
+    check_incumbents = ndc_stage.check_ndc_handoff_incumbents if is_handoff else ndc_stage.check_ndc_incumbents
     if guard == "valid":
-        await ndc_stage.check_ndc_incumbents(database, attempt)
+        await check_incumbents(database, attempt)
     else:
         with pytest.raises(RuntimeError):
-            await ndc_stage.check_ndc_incumbents(database, attempt)
+            await check_incumbents(database, attempt)
     if guard == "busy":
         database.status.assert_not_called()
     else:
         assert database.status.await_count == 2
         assert all("NOWAIT" in call.args[0] for call in database.status.call_args_list)
+        expected_mode = "ACCESS SHARE" if is_handoff else "ACCESS EXCLUSIVE"
+        assert all(expected_mode in call.args[0] for call in database.status.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -253,6 +257,7 @@ async def test_discard_removes_only_verified_unpublished_stages(monkeypatch, sta
         {"product": None, "package": None} if state == "absent" else attempt.table_oids)))
     monkeypatch.setattr(ndc_stage, "lock_ndc_stages", AsyncMock(
         side_effect=RuntimeError("ownership changed") if state == "foreign" else None))
+    monkeypatch.setattr(ndc_stage, "require_ndc_cleanup_owner", AsyncMock())
     if state == "foreign":
         with pytest.raises(RuntimeError, match="ownership changed"):
             await ndc_stage.discard_ndc_stages(database, attempt)

@@ -12,6 +12,7 @@ from sqlalchemy import MetaData, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from db.models import Package, Product
+from process.ndc_handoff import require_ndc_cleanup_owner
 
 
 @dataclass
@@ -105,6 +106,7 @@ async def discard_ndc_stages(database, attempt: NdcAttempt) -> None:
         if all(table_oid is None for table_oid in current.values()):
             return
         await lock_ndc_stages(database, attempt, exclusive=True)
+        await require_ndc_cleanup_owner(database, attempt)
         names = ", ".join(f"{attempt.schema}.{name}_{attempt.suffix}" for name in ("product", "package"))
         await database.status(f"DROP TABLE {names}")
 
@@ -156,6 +158,7 @@ async def _check_ndc_run_owner(database, attempt: NdcAttempt) -> None:
     run_id = await database.scalar(text(f"""
         SELECT run_id FROM {attempt.schema}.import_run
          WHERE run_id=:run_id AND importer='ndc' AND metrics->>'ndc_attempt_id'=:attempt_id AND status='running'
+           AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_handoff')
          FOR SHARE
     """), run_id=attempt.run_id, attempt_id=attempt.suffix)
     if run_id != attempt.run_id:
@@ -204,13 +207,22 @@ async def _audit_locked_ndc_table(database, driver, attempt: NdcAttempt, name: s
 
 async def check_ndc_incumbents(database, attempt: NdcAttempt) -> None:
     """Use a non-waiting publication fence, then lock and compare the live pair."""
+    await _lock_ndc_incumbents(database, attempt, "ACCESS EXCLUSIVE")
+
+
+async def check_ndc_handoff_incumbents(database, attempt: NdcAttempt) -> None:
+    """Fence local handoff without requiring write authority over the serving pair."""
+    await _lock_ndc_incumbents(database, attempt, "ACCESS SHARE")
+
+
+async def _lock_ndc_incumbents(database, attempt: NdcAttempt, lock_mode: str) -> None:
     acquired = await database.scalar(text("SELECT pg_try_advisory_xact_lock(hashtextextended(:scope, 0))"),
                                      scope=f"{attempt.schema}:ndc-publication")
     if not acquired:
         raise RuntimeError("another NDC publication is active")
     for name, table_oid in attempt.incumbent_oids.items():
         if table_oid is not None:
-            await database.status(f"LOCK TABLE {attempt.schema}.{name} IN ACCESS EXCLUSIVE MODE NOWAIT")
+            await database.status(f"LOCK TABLE {attempt.schema}.{name} IN {lock_mode} MODE NOWAIT")
     if await ndc_table_oids(database, attempt.schema) != attempt.incumbent_oids:
         raise RuntimeError("NDC incumbent changed during acquisition")
 
@@ -232,6 +244,7 @@ async def finish_ndc_publication(database, attempt: NdcAttempt, receipt: dict, *
                finished_at=CURRENT_TIMESTAMP, metrics=CAST(:metrics AS jsonb), error=NULL,
                progress=CAST(:progress AS jsonb)
          WHERE run_id=:run_id AND importer='ndc' AND metrics->>'ndc_attempt_id'=:attempt_id AND status='running'
+           AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_handoff')
     """), run_id=attempt.run_id, attempt_id=attempt.suffix, phase=phase, metrics=json.dumps(metrics_dict),
         progress=json.dumps({"unit": "records", "done": attempt.counts["source_products"],
                              "total": attempt.counts["source_products"], "pct": 100, "message": phase}))
@@ -253,6 +266,7 @@ async def fail_ndc_attempt(database, attempt: NdcAttempt) -> int:
            SET status='failed', phase_detail='ndc import failed', finished_at=CURRENT_TIMESTAMP,
                error='{{"code":"ndc_import_failed"}}'::jsonb
          WHERE run_id=:run_id AND importer='ndc' AND metrics->>'ndc_attempt_id'=:attempt_id AND status='running'
+           AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_handoff')
     """), run_id=attempt.run_id, attempt_id=attempt.suffix)
 
 
