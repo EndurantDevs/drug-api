@@ -21,6 +21,7 @@ from process.live_progress import (
     progress_payload_from_live,
     read_live_progress,
 )
+from process.ndc_handoff import has_valid_ndc_handoff
 from process.redis_config import redis_dsn, redis_settings
 
 ENGINE_NAME = "drug-api"
@@ -440,6 +441,12 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 def _overlay_live_progress(data: dict[str, Any]) -> dict[str, Any]:
     if data.get("status") not in ACTIVE_STATUSES:
+        return data
+    metrics_dict = data.get("metrics")
+    if (data.get("importer") == "ndc" and data.get("status") == "finalizing"
+            and isinstance(metrics_dict, dict) and isinstance(metrics_dict.get("ndc_attempt_id"), str)
+            and has_valid_ndc_handoff(metrics_dict.get("ndc_handoff"), data.get("run_id"),
+                                     metrics_dict["ndc_attempt_id"])):
         return data
     live = read_live_progress(str(data.get("run_id") or ""))
     if not live:

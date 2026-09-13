@@ -15,6 +15,7 @@ from process.control_lifecycle import ensure_import_run_table
 from process.import_status_events import enqueue_status_event
 from process.live_progress import enqueue_live_progress
 from process.ndc_acquire import acquire_ndc_manifest, consume_ndc_partitions
+from process.ndc_handoff import has_valid_ndc_handoff, require_handoff_transaction_owner, validate_publication_mode
 from process.ndc_publish import publish_ndc_tables
 from process.ndc_stage import (
     create_ndc_stages,
@@ -190,6 +191,7 @@ async def shutdown(ctx):
 async def init_file(ctx, task=None):
     """Await complete NDC acquisition, paired saves, and atomic native publication."""
     task = task if isinstance(task, dict) else {}
+    publication_mode = _ndc_publication_mode(task)
     standalone_id = uuid.uuid5(uuid.NAMESPACE_URL, str(ctx["job_id"])) if ctx.get("job_id") else uuid.uuid4()
     run_id = task.get("run_id") or "ndc-" + standalone_id.hex
     attempt = new_ndc_attempt(run_id, os.getenv("DB_SCHEMA") or "rx_data")
@@ -214,7 +216,8 @@ async def init_file(ctx, task=None):
         acquisition = await consume_ndc_partitions(manifest, consume_batch)
         async with asyncio.timeout(1800):
             receipt = await publish_ndc_tables(db, attempt.schema, attempt.suffix,
-                                               attempt=attempt, acquisition=acquisition)
+                                               attempt=attempt, acquisition=acquisition,
+                                               publication_mode=publication_mode)
     except BaseException:
         try:
             async with asyncio.timeout(10):
@@ -228,8 +231,39 @@ async def init_file(ctx, task=None):
         except Exception:
             logger.warning("NDC owned-stage cleanup failed; retained for inspection")
         raise
-    _announce_ndc_completion(attempt, receipt)
+    if publication_mode == "handoff" and acquisition["complete"]:
+        if not has_valid_ndc_handoff(receipt, attempt.run_id, attempt.suffix):
+            raise RuntimeError("NDC publication handoff returned an invalid receipt")
+        _announce_ndc_handoff(attempt, receipt)
+    else:
+        _announce_ndc_completion(attempt, receipt)
     return receipt
+
+
+def _ndc_publication_mode(task: dict) -> str:
+    mode = validate_publication_mode(os.getenv("HLTHPRT_NDC_PUBLICATION_MODE", "native"))
+    if mode == "handoff" and not (task.get("test_mode") or task.get("test")):
+        require_handoff_transaction_owner(db)
+    return mode
+
+
+def _announce_ndc_handoff(attempt, receipt):
+    try:
+        enqueue_status_event({
+            "run_id": attempt.run_id, "importer": "ndc", "status": "finalizing",
+            "phase_detail": "ndc stages awaiting publication",
+            "metrics": {"ndc_attempt_id": attempt.suffix, "ndc_handoff": receipt},
+            "progress": {"unit": "records", "done": attempt.counts["source_products"],
+                         "total": attempt.counts["source_products"], "pct": 100,
+                         "message": "awaiting publication"},
+        })
+        enqueue_live_progress(
+            run_id=attempt.run_id, importer="ndc", status="finalizing", unit="records",
+            done=attempt.counts["source_products"], total=attempt.counts["source_products"], pct=100,
+            phase="ndc stages awaiting publication", message="awaiting publication",
+        )
+    except Exception:
+        logger.warning("NDC handoff event unavailable; local handoff is committed")
 
 
 def _announce_ndc_completion(attempt, receipt):

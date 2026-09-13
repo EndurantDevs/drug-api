@@ -70,6 +70,49 @@ failed or canceled run. Legacy queued partition/save
 jobs are no longer worker entrypoints; drain the previous worker queue before
 switching to this coordinator.
 
+## Optional completed-stage handoff
+
+`HLTHPRT_NDC_PUBLICATION_MODE` defaults to `native`. The optional `handoff` mode
+prepares the same complete product/package pair, indexes and source audit, then
+leaves publication to a separate local consumer. Unknown values are rejected;
+sample imports keep their existing validation and cleanup behavior. This mode
+does not start a consumer or configure any network connection.
+
+For a complete handoff, the coordinator requires its own database transaction.
+An entry already bound to another session or an externally supplied connection
+is rejected before acquisition; the publication boundary repeats these checks.
+After the owned transaction commits,
+the worker returns a distinct `ndc-stage-handoff-v1` receipt and releases its
+connection without waiting for publication. A completed worker job means the
+handoff finished; the native import remains `finalizing`, without a finish time
+or a publication-success receipt.
+
+The full receipt is stored in `import_run.metrics.ndc_handoff`. It binds the
+native run and attempt, local database/run-table OIDs, exact stage names/OIDs,
+expected incumbent OIDs, acquisition evidence, counts, column shapes and ordered
+CSV hashes. Its canonical candidate digest also appears in both stage comments.
+The run transition and paired comments commit atomically. The digest identifies
+the candidate; it is not an independent signature or an immutable database seal.
+
+Native save, failure and cleanup operations refuse a handed-off attempt even
+after later status changes. Replaced ownership comments or missing native
+ownership also prevent ordinary cleanup. If a commit acknowledgment is lost,
+inspect the exact durable run and receipt before recovery; do not reimport or
+delete that pair based only on the worker error. The local consumer owns final
+publication or explicit disposal of accepted handoffs. It must independently
+establish table immutability and validate the exact pair before publication.
+Keep `native` mode until that consumer and its recovery behavior are available.
+
+The API retains durable handoff progress when stale acquisition heartbeats remain
+in Redis. Handoff uses the existing nonwaiting publication advisory fence and
+`ACCESS SHARE NOWAIT` on the incumbent pair, allowing a reader of separately owned
+canonical views to hand off its stages. Native publication retains its exclusive
+locks. These OID checks do not attest a view's target or replace the consumer's
+own current-binding checks. Index creation and full audit precede the incumbent lock; the final
+handoff metadata and transaction commit have a three-second deadline inside the
+existing overall finalization bound. No worker connection or lock waits for the
+consumer.
+
 ## Execution limits
 
 - `HLTHPRT_NDC_JOB_TIMEOUT_SECONDS` defaults to 86400 (24 hours), replacing the

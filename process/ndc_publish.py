@@ -1,9 +1,13 @@
 """DDL helpers for publishing staged FDA NDC import tables."""
 
+import asyncio
 from typing import Any
 
+from process.ndc_handoff import handoff_ndc_stages, require_handoff_transaction_owner, validate_publication_mode
 from process.ndc_stage import (
+    _check_ndc_run_owner,
     audit_ndc_tables,
+    check_ndc_handoff_incumbents,
     check_ndc_incumbents,
     finish_ndc_publication,
     lock_ndc_stages,
@@ -11,15 +15,23 @@ from process.ndc_stage import (
 
 
 async def publish_ndc_tables(database: Any, db_schema: str, import_date: str, *,
-                             attempt=None, acquisition=None):
+                             attempt=None, acquisition=None, publication_mode="native"):
     """Build staged indexes before touching either live table, then publish atomically."""
+    validate_publication_mode(publication_mode)
+    if publication_mode == "handoff":
+        if attempt is None:
+            raise ValueError("NDC handoff requires an owned attempt")
+        if acquisition["complete"]:
+            require_handoff_transaction_owner(database)
     await database.status("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
     await database.status("CREATE EXTENSION IF NOT EXISTS btree_gin;")
-    async with database.transaction() as session:
+    async with asyncio.timeout(None) as publication_deadline, database.transaction() as session:
         if attempt is not None:
             if attempt.schema != db_schema or attempt.suffix != import_date:
                 raise ValueError("NDC publication scope differs from stage owner")
             await lock_ndc_stages(database, attempt, exclusive=True)
+            if publication_mode == "handoff" and acquisition["complete"]:
+                await _check_ndc_run_owner(database, attempt)
             if not acquisition["complete"]:
                 receipt = await audit_ndc_tables(database, session, attempt, acquisition)
                 return await finish_ndc_publication(database, attempt, receipt, published=False)
@@ -32,6 +44,10 @@ async def publish_ndc_tables(database: Any, db_schema: str, import_date: str, *,
                 await _create_product_indexes(database, db_schema, import_date)
         if attempt is not None:
             receipt = await audit_ndc_tables(database, session, attempt, acquisition)
+            if publication_mode == "handoff":
+                publication_deadline.reschedule(asyncio.get_running_loop().time() + 3)
+                await check_ndc_handoff_incumbents(database, attempt)
+                return await handoff_ndc_stages(database, attempt, receipt)
             await check_ndc_incumbents(database, attempt)
         for table in ['product', 'package']:
             await _publish_single_ndc_table(database, db_schema, table, import_date)
