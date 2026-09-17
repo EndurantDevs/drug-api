@@ -5,7 +5,7 @@ requires-python = ">=3.14"
 dependencies = [
     "aiofile==3.12.3",
     "aiofiles==25.1.0",
-    "alembic==1.19.2",
+    "alembic==1.20.0",
     "anyio==4.15.1",
     "arq==0.28.0",
     "async-timeout==5.0.1",
@@ -47,7 +47,7 @@ dependencies = [
     "ujson==6.0.0",
     "uvloop==0.22.1",
     "websockets==17.1",
-    "wrapt==2.4.0",
+    "wrapt==2.4.1",
 ]
 
 [dependency-groups]
@@ -57,8 +57,8 @@ test = [
 ]
 dev = [
     { include-group = "test" },
-    "coverage==7.16.0",
-    "ruff==0.16.6",
+    "coverage==7.16.1",
+    "ruff==0.16.7",
     "pip-audit==2.10.1",
     "pylint==4.0.8",
 ]
