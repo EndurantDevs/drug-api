@@ -189,9 +189,11 @@ def test_artifacts_expire_after_one_day_and_keep_exact_producer_bindings():
         step = next(step for step in jobs[job_id]["steps"] if step.get("id") == step_id)
         assert step["uses"].startswith("actions/upload-artifact@")
     publisher = jobs["dev-image-publication"]
-    prepare = next(step for step in publisher["steps"] if step.get("id") == "image")
-    assert prepare["env"] == {
-        "GH_TOKEN": "${{ github.token }}",
+    assert publisher["env"] == {
+        "CI_REVISION": revision,
+        "PYTHONDONTWRITEBYTECODE": "1",
         "IMAGE_ARTIFACT_ID": "${{ needs.validate.outputs.image_artifact_id }}",
         "MEASUREMENT_ARTIFACT_ID": "${{ needs.publish.outputs.measurement_artifact_id }}",
     }
+    prepare = next(step for step in publisher["steps"] if step.get("id") == "image")
+    assert prepare["env"] == {"GH_TOKEN": "${{ github.token }}"}
