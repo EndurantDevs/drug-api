@@ -99,12 +99,20 @@ def test_stale_artifact_cleanup_is_main_only_and_pinned():
         {"name": "Check out trusted artifact lifecycle",
          "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
          "with": {"repository": "EndurantDevs/endurant-ci",
-                  "ref": "88930b1a4c1926edfe4a0dd9dbba041058e59795", "path": "ci",
+                  "ref": "7bb1b6bd5c5dde2be330c040957946bb990c6d81", "path": "ci",
                   "persist-credentials": False}},
         {"name": "Delete only obsolete authenticated artifacts",
          "env": {"GH_TOKEN": "${{ github.token }}", "PYTHONDONTWRITEBYTECODE": "1"},
          "run": "python3 ci/scripts/artifact_cleanup.py --stale"},
     ]
+
+
+def test_artifacts_expire_after_machine_consumers_finish():
+    path = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    uploads = [step for job in workflow["jobs"].values() for step in job.get("steps", [])
+               if str(step.get("uses", "")).startswith("actions/upload-artifact@")]
+    assert uploads and all(step["with"]["retention-days"] == 1 for step in uploads)
 
 
 def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
@@ -118,10 +126,10 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
     assert workflow["concurrency"] == {
         "group": (
             "${{ " + metadata_only
-            + " && format('ci-metadata-{0}', github.run_id) || github.event_name == 'push' "
+            + " && format('ci-metadata-{0}', github.event.pull_request.number) || github.event_name == 'push' "
             + "&& format('ci-push-{0}', github.run_id) || format('ci-{0}', github.ref) }}"
         ),
-        "cancel-in-progress": "${{ github.event_name == 'pull_request' && !(" + metadata_only + ") }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     }
     labels_by_job = {"smoke": "portable import checks", "validate": "Tests and build",
                      "publish": "Coverage results", "dev-image-publication": "DEV image publication",
@@ -136,8 +144,7 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
             assert job["if"] == "${{ success() }}"
         else:
             assert job["name"] == "${{ " + metadata_only + f" && '{label} (metadata only)' || '{label}' " + "}}"
-            condition = "always()" if job_id == "artifact-cleanup" else "success()"
-            assert job["if"] == "${{ !(" + metadata_only + ") && (" + condition + ") }}"
+            assert job["if"] == "${{ !(" + metadata_only + ") && (success()) }}"
         assert "uses" not in job
         assert job["runs-on"] == "ubuntu-latest"
         assert not job.get("continue-on-error")
@@ -153,9 +160,11 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
         if job_id not in {"smoke", "artifact-cleanup"}:
             assert job["env"]["CI_REVISION"] == revision
     assert workflow["jobs"]["publish"]["needs"] == "validate"
-    assert workflow["jobs"]["dev-image-publication"]["needs"] == ["smoke", "publish"]
+    assert workflow["jobs"]["dev-image-publication"]["needs"] == [
+        "smoke", "publish", "validate",
+    ]
     cleanup = workflow["jobs"]["artifact-cleanup"]
-    assert cleanup["needs"] == ["dev-image-publication"]
+    assert cleanup["needs"] == ["dev-image-publication", "validate", "publish"]
     assert cleanup["timeout-minutes"] == 10
     assert cleanup["steps"] == [
         {"name": "Check out trusted cleanup helper",
@@ -163,6 +172,12 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
          "with": {"repository": "EndurantDevs/endurant-ci", "ref": revision,
                   "path": "ci", "persist-credentials": False}},
         {"name": "Remove validated CI intermediates",
-         "env": {"GH_TOKEN": "${{ github.token }}", "PYTHONDONTWRITEBYTECODE": "1"},
+         "env": {
+             "GH_TOKEN": "${{ github.token }}",
+             "PYTHONDONTWRITEBYTECODE": "1",
+             "IMAGE_ARTIFACT_ID": "${{ needs.validate.outputs.image_artifact_id }}",
+             "MEASUREMENT_ARTIFACT_ID": "${{ needs.publish.outputs.measurement_artifact_id }}",
+             "IMAGE_RECEIPT_ARTIFACT_ID": "${{ needs.dev-image-publication.outputs.receipt_artifact_id }}",
+         },
          "run": "python3 ci/scripts/artifact_cleanup.py"},
     ]
