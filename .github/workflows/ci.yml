@@ -6,10 +6,9 @@ permissions:
   actions: read
 concurrency:
   group: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
-    && format('ci-metadata-{0}', github.run_id) || github.event_name == 'push' && format('ci-push-{0}', github.run_id) ||
-    format('ci-{0}', github.ref) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.event.action
-    == 'edited' && !github.event.changes.title && !github.event.changes.base) }}
+    && format('ci-metadata-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('ci-push-{0}',
+    github.run_id) || format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   smoke:
     name: portable import checks
@@ -42,8 +41,9 @@ jobs:
     timeout-minutes: 60
     outputs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
+      image_artifact_id: ${{ steps.image-artifact.outputs.artifact-id }}
     env:
-      CI_REVISION: 8521fbd0668dc15cf59c7b318c1071b90520a920
+      CI_REVISION: 7982a6df07b05d048b5f1843910d4d07fa78d5af
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -51,7 +51,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 8521fbd0668dc15cf59c7b318c1071b90520a920
+        ref: 7982a6df07b05d048b5f1843910d4d07fa78d5af
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -91,6 +91,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: bash "$CI_ROOT/scripts/drug/check" measure
     - name: Upload tested DEV image
+      id: image-artifact
       if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
@@ -120,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: 8521fbd0668dc15cf59c7b318c1071b90520a920
+      CI_REVISION: 7982a6df07b05d048b5f1843910d4d07fa78d5af
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -128,7 +129,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 8521fbd0668dc15cf59c7b318c1071b90520a920
+        ref: 7982a6df07b05d048b5f1843910d4d07fa78d5af
         path: ci
         persist-credentials: false
     - name: Resolve exact public source event
@@ -159,6 +160,7 @@ jobs:
 
         '
     - name: Upload public measurement
+      id: measurement-artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: drug-public-measurement-${{ github.run_id }}-${{ github.run_attempt }}
@@ -170,7 +172,9 @@ jobs:
 
           '
         if-no-files-found: error
-        retention-days: 90
+        retention-days: 1
+    outputs:
+      measurement_artifact_id: ${{ steps.measurement-artifact.outputs.artifact-id }}
     if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
       && (success()) }}
   dev-image-publication:
@@ -181,26 +185,29 @@ jobs:
     needs:
     - smoke
     - publish
+    - validate
     permissions:
       contents: read
       pull-requests: read
       actions: read
       packages: write
     env:
-      CI_REVISION: 8521fbd0668dc15cf59c7b318c1071b90520a920
+      CI_REVISION: 7982a6df07b05d048b5f1843910d4d07fa78d5af
       PYTHONDONTWRITEBYTECODE: '1'
     steps:
     - name: Check out trusted image publisher
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 8521fbd0668dc15cf59c7b318c1071b90520a920
+        ref: 7982a6df07b05d048b5f1843910d4d07fa78d5af
         path: ci
         persist-credentials: false
     - name: Authenticate DEV image input
       id: image
       env:
         GH_TOKEN: ${{ github.token }}
+        IMAGE_ARTIFACT_ID: ${{ needs.validate.outputs.image_artifact_id }}
+        MEASUREMENT_ARTIFACT_ID: ${{ needs.publish.outputs.measurement_artifact_id }}
       run: python3 ci/scripts/source_image.py prepare
     - name: Download validated image archive
       if: steps.image.outputs.publish == 'true'
@@ -222,7 +229,7 @@ jobs:
         name: drug-public-image-intent-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/public-image-intent/intent.json
         if-no-files-found: error
-        retention-days: 90
+        retention-days: 1
     - name: Publish validated DEV image
       if: steps.image.outputs.publish == 'true'
       env:
@@ -230,17 +237,20 @@ jobs:
       run: python3 ci/scripts/source_image.py publish
     - name: Upload DEV image receipt
       if: steps.image.outputs.publish == 'true'
+      id: receipt-artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: drug-public-image-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/public-image-receipt/image.json
         if-no-files-found: error
-        retention-days: 90
+        retention-days: 1
     - name: Reconcile DEV image publication
       if: always() && steps.image.outputs.publish == 'true'
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 ci/scripts/source_image.py reconcile
+    outputs:
+      receipt_artifact_id: ${{ steps.receipt-artifact.outputs.artifact-id }}
     if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
       && (success()) }}
   artifact-cleanup:
@@ -250,8 +260,10 @@ jobs:
     timeout-minutes: 10
     needs:
     - dev-image-publication
+    - validate
+    - publish
     if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
-      && (always()) }}
+      && (success()) }}
     permissions:
       contents: read
       actions: write
@@ -260,13 +272,16 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 8521fbd0668dc15cf59c7b318c1071b90520a920
+        ref: 7982a6df07b05d048b5f1843910d4d07fa78d5af
         path: ci
         persist-credentials: false
     - name: Remove validated CI intermediates
       env:
         GH_TOKEN: ${{ github.token }}
         PYTHONDONTWRITEBYTECODE: '1'
+        IMAGE_ARTIFACT_ID: ${{ needs.validate.outputs.image_artifact_id }}
+        MEASUREMENT_ARTIFACT_ID: ${{ needs.publish.outputs.measurement_artifact_id }}
+        IMAGE_RECEIPT_ARTIFACT_ID: ${{ needs.dev-image-publication.outputs.receipt_artifact_id }}
       run: python3 ci/scripts/artifact_cleanup.py
 'on':
   pull_request:
