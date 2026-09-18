@@ -154,7 +154,13 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
             assert job["env"]["CI_REVISION"] == revision
     assert workflow["jobs"]["publish"]["needs"] == "validate"
     assert workflow["jobs"]["dev-image-publication"]["needs"] == ["smoke", "publish", "validate"]
-    cleanup = workflow["jobs"]["artifact-cleanup"]
+
+
+def test_artifacts_expire_after_one_day_and_keep_exact_producer_bindings():
+    path = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    jobs = yaml.safe_load(path.read_text())["jobs"]
+    revision = jobs["validate"]["env"]["CI_REVISION"]
+    cleanup = jobs["artifact-cleanup"]
     assert cleanup["needs"] == ["dev-image-publication", "validate", "publish"]
     assert cleanup["timeout-minutes"] == 10
     assert cleanup["steps"] == [
@@ -169,11 +175,6 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
                  "IMAGE_RECEIPT_ARTIFACT_ID": "${{ needs.dev-image-publication.outputs.receipt_artifact_id }}"},
          "run": "python3 ci/scripts/artifact_cleanup.py"},
     ]
-
-
-def test_artifacts_expire_after_one_day_and_keep_exact_producer_bindings():
-    path = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
-    jobs = yaml.safe_load(path.read_text())["jobs"]
     for job in jobs.values():
         for step in job["steps"]:
             if step.get("uses", "").startswith("actions/upload-artifact@"):
