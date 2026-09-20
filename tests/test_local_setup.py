@@ -33,7 +33,7 @@ def test_uv_lock_is_the_only_binary_dependency_install_path():
     lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
     uv = project["tool"]["uv"]
     assert project["project"]["requires-python"] == ">=3.14"
-    assert uv == {"package": False, "no-build": True, "required-version": "==0.12.12"}
+    assert uv == {"package": False, "no-build": True, "required-version": "==0.12.17"}
     assert not (root / "requirements.txt").exists()
     assert not (root / "requirements-dev.txt").exists()
     assert all(
@@ -43,8 +43,8 @@ def test_uv_lock_is_the_only_binary_dependency_install_path():
     )
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
     assert (
-        "ghcr.io/astral-sh/uv:0.12.12@"
-        "sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4"
+        "ghcr.io/astral-sh/uv:0.12.17@"
+        "sha256:10787c682e4184e4f290de1171fd4703dc63de99221f10fe1c99002ce7fa9acc"
         in dockerfile
     )
     assert "uv sync --locked --no-dev" in dockerfile
