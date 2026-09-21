@@ -287,12 +287,15 @@ async def _publish(schema, import_date, consumed_dependencies):
 async def _build_evidence_stage(evidence_cls, schema, import_date, batch_size, test_limit, test_mode, run_id):
     async with db.transaction():
         label_dependency, ndc_dependency = await local_indication_dependencies(db, schema)
-        rxnorm_ids_by_product = await _rxnorm_ids_by_product()
         relationships_by_rxnorm, clinical_dependency = await _load_official_condition_context(test_mode=test_mode)
         consumed_dependencies = (
             indication_dependencies(label_dependency, ndc_dependency, clinical_dependency)
             if clinical_dependency is not None else None
         )
+        should_publish_stage = _should_publish_stage(test_mode)
+        if should_publish_stage and consumed_dependencies is None:
+            raise RuntimeError("Clinical reference identity is unavailable for publication")
+        rxnorm_ids_by_product = await _rxnorm_ids_by_product()
         scanned, matched = await _scan_condition_evidence(
             evidence_cls,
             rxnorm_ids_by_product,
@@ -308,10 +311,7 @@ async def _build_evidence_stage(evidence_cls, schema, import_date, batch_size, t
         should_allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
         if evidence_count < min_rows and not should_allow_empty:
             raise RuntimeError(f"Drug indication stage has {evidence_count} rows, below minimum {min_rows}.")
-        should_publish_stage = _should_publish_stage(test_mode)
         if should_publish_stage:
-            if consumed_dependencies is None:
-                raise RuntimeError("Clinical reference identity is unavailable for publication")
             await _publish(schema, import_date, consumed_dependencies)
     return scanned, matched, evidence_count, consumed_dependencies, should_publish_stage
 

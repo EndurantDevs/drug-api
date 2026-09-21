@@ -22,6 +22,7 @@ async def publish_label_table(database: Any, db_schema: str, import_date: str) -
             f"CREATE INDEX idx_label_set_id_{import_date} ON "
             f"{db_schema}.label_{import_date} (set_id);")
 
+        await database.status("SET LOCAL lock_timeout = '5s'")
         await database.status(f"DROP TABLE IF EXISTS {db_schema}.label_old;")
 
         await database.status(f"ALTER INDEX IF EXISTS "

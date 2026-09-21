@@ -120,6 +120,9 @@ async def test_label_publication_advances_authority_before_atomic_commit(monkeyp
     assert database.events[0] == "begin"
     assert database.events[-2:] == ["authority", "commit"]
     assert "ALTER TABLE IF EXISTS rx_data.label_20260921 RENAME TO label;" in database.statements
+    timeout_index = database.statements.index("SET LOCAL lock_timeout = '5s'")
+    first_live_ddl_index = database.statements.index("DROP TABLE IF EXISTS rx_data.label_old;")
+    assert timeout_index < first_live_ddl_index
 
 
 @pytest.mark.asyncio
@@ -405,3 +408,31 @@ async def test_indication_scan_holds_one_context_transaction_without_a_dependenc
 
     assert build_outcome[:3] == (0, 0, 1)
     assert database.events == ["begin", "commit"]
+
+
+@pytest.mark.asyncio
+async def test_indication_publication_rejects_missing_clinical_identity_before_scan(monkeypatch):
+    database = _BuildDatabase()
+
+    async def local_inputs(*_args):
+        return _dependencies()["label"], _dependencies()["ndc"]
+
+    async def clinical_inputs(test_mode=False):
+        assert not test_mode
+        return {}, None
+
+    async def should_not_run(*_args):
+        raise AssertionError("scan or index work started")
+
+    evidence_cls = type("Evidence", (), {"evidence_id": object()})
+    monkeypatch.setattr(drug_indications, "db", database)
+    monkeypatch.setattr(drug_indications, "local_indication_dependencies", local_inputs)
+    monkeypatch.setattr(drug_indications, "_rxnorm_ids_by_product", should_not_run)
+    monkeypatch.setattr(drug_indications, "_load_official_condition_context", clinical_inputs)
+    monkeypatch.setattr(drug_indications, "_scan_condition_evidence", should_not_run)
+    monkeypatch.setattr(drug_indications, "_create_indexes", should_not_run)
+
+    with pytest.raises(RuntimeError, match="Clinical reference identity is unavailable"):
+        await drug_indications._build_evidence_stage(evidence_cls, "rx_data", "20260921", 100, 10, False, None)
+
+    assert database.events == ["begin", "rollback"]
