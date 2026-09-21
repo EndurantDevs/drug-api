@@ -274,6 +274,7 @@ async def test_label_shutdown_publishes_suffixed_label_table_inside_transaction(
     monkeypatch.setattr(label, "db", fake_db)
     monkeypatch.setattr(label, "mark_control_run", fake_mark_control_run)
     monkeypatch.setattr(label, "print_time_info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("process.label_publish.publish_local_result_generation", fake_mark_control_run)
 
     context_dict = {
         "import_date": "20260213",
@@ -295,9 +296,22 @@ async def test_label_shutdown_publishes_suffixed_label_table_inside_transaction(
 async def test_drug_indications_publish_switches_staging_table(monkeypatch):
     fake_db = _RecordingDb()
 
-    monkeypatch.setattr(drug_indications, "db", fake_db)
+    async def fake_publish(*_args, **_kwargs):
+        return None
 
-    await drug_indications._publish("rx_data", "20260213")
+    monkeypatch.setattr(drug_indications, "db", fake_db)
+    monkeypatch.setattr(drug_indications, "publish_local_result_generation", fake_publish)
+
+    await drug_indications._publish("rx_data", "20260213", {
+        "format": "drug-result-consumed-dependencies-v1",
+        "label": {"relations": [{"name": "label", "oid": 1}]},
+        "ndc": {"relations": [{"name": "product", "oid": 2}]},
+        "clinical-reference": {"relations": [
+            {"name": "code_relationship", "oid": 3},
+            {"name": "code_catalog", "oid": 4},
+            {"name": "code_synonym", "oid": 5},
+        ]},
+    })
 
     assert "DROP TABLE IF EXISTS rx_data.drug_condition_evidence;" in fake_db.statements
     assert (

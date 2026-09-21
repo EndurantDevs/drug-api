@@ -12,6 +12,14 @@ from db.models import DrugConditionEvidence, Label, Product, db
 from process.control_lifecycle import mark_control_run
 from process.ext.utils import make_class, print_time_info, push_objects
 from process.live_progress import enqueue_live_progress
+from process.result_publication_authority import (
+    DEPENDENCY_RELATIONS,
+    dependency_entry,
+    indication_dependencies,
+    local_indication_dependencies,
+    publish_local_result_generation,
+    schema_name,
+)
 
 NLM_ATTRIBUTION = (
     "This product uses publicly available data from the U.S. National Library of Medicine (NLM), "
@@ -93,58 +101,67 @@ def _is_term_match(text_lower, term):
     return re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", text_lower) is not None
 
 
+async def _read_clinical_rows(connection, schema):
+    """Read one stable snapshot; the role needs UPDATE, DELETE, or TRUNCATE lock privilege."""
+
+    async with connection.transaction():
+        relation_names = DEPENDENCY_RELATIONS["clinical-reference"]
+        quoted_relations = ", ".join(f'"{schema}"."{name}"' for name in relation_names)
+        await connection.execute(f"LOCK TABLE {quoted_relations} IN SHARE MODE")
+        identity_rows = await connection.fetch(
+            "SELECT relation_name, "
+            "to_regclass(format('%I.%I', CAST($1 AS text), relation_name))::oid::bigint AS oid "
+            "FROM unnest($2::text[]) WITH ORDINALITY AS relations(relation_name, ordinal) ORDER BY ordinal",
+            schema,
+            list(relation_names),
+        )
+        clinical_dependency = dependency_entry(
+            "clinical-reference",
+            tuple((identity_row["relation_name"], identity_row["oid"]) for identity_row in identity_rows),
+        )
+        relationship_rows = await connection.fetch(
+            f"""
+            SELECT r.from_code AS rxcui, r.to_system AS condition_system, r.to_code AS condition_code,
+                   r.relationship AS relationship,
+                   COALESCE(r.source_attribution, c.source_attribution) AS source_attribution
+              FROM "{schema}"."code_relationship" r
+              JOIN "{schema}"."code_catalog" c ON c.code_system = r.to_system
+               AND c.code = r.to_code AND c.code_type = 'condition'
+             WHERE r.from_system = 'RXNORM' AND r.relationship IN ('may_treat', 'may_prevent')
+            """
+        )
+        term_rows = await connection.fetch(
+            f"""
+            SELECT code_system AS condition_system, code AS condition_code,
+                   display_name AS term, 'preferred' AS term_type
+              FROM "{schema}"."code_catalog"
+             WHERE code_type = 'condition' AND COALESCE(display_name, '') <> ''
+            UNION ALL
+            SELECT code_system AS condition_system, code AS condition_code, synonym AS term, term_type
+              FROM "{schema}"."code_synonym" WHERE COALESCE(synonym, '') <> ''
+            """
+        )
+    return relationship_rows, term_rows, clinical_dependency
+
+
 async def _fetch_clinical_rows(test_mode=False):
-    schema = _clinical_schema()
+    schema = schema_name(_clinical_schema())
     try:
         connection = await asyncpg.connect(**_clinical_connection_kwargs())
         try:
-            relationship_rows = await connection.fetch(
-                f"""
-                SELECT r.from_code AS rxcui,
-                       r.to_system AS condition_system,
-                       r.to_code AS condition_code,
-                       r.relationship AS relationship,
-                       COALESCE(r.source_attribution, c.source_attribution) AS source_attribution
-                  FROM {schema}.code_relationship r
-                  JOIN {schema}.code_catalog c
-                    ON c.code_system = r.to_system
-                   AND c.code = r.to_code
-                   AND c.code_type = 'condition'
-                 WHERE r.from_system = 'RXNORM'
-                   AND r.relationship IN ('may_treat', 'may_prevent')
-                """
-            )
-            term_rows = await connection.fetch(
-                f"""
-                SELECT code_system AS condition_system,
-                       code AS condition_code,
-                       display_name AS term,
-                       'preferred' AS term_type
-                  FROM {schema}.code_catalog
-                 WHERE code_type = 'condition'
-                   AND COALESCE(display_name, '') <> ''
-                UNION ALL
-                SELECT code_system AS condition_system,
-                       code AS condition_code,
-                       synonym AS term,
-                       term_type
-                  FROM {schema}.code_synonym
-                 WHERE COALESCE(synonym, '') <> ''
-                """
-            )
+            return await _read_clinical_rows(connection, schema)
         finally:
             await connection.close()
     except Exception as exc:
         should_allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
         if test_mode or should_allow_empty:
             print(f"Clinical terminology lookup skipped: {exc}")
-            return [], []
+            return [], [], None
         raise RuntimeError(f"Clinical terminology lookup failed: {exc}") from exc
-    return relationship_rows, term_rows
 
 
 async def _load_official_condition_context(test_mode=False):
-    relationship_rows, term_rows = await _fetch_clinical_rows(test_mode=test_mode)
+    relationship_rows, term_rows, clinical_dependency = await _fetch_clinical_rows(test_mode=test_mode)
     terms_by_condition = defaultdict(list)
     for row in term_rows:
         term = _normalize_term(row['term'])
@@ -165,7 +182,7 @@ async def _load_official_condition_context(test_mode=False):
                 'terms': terms_by_condition.get(key, []),
             }
         )
-    return relationships_by_rxnorm
+    return relationships_by_rxnorm, clinical_dependency
 
 
 def _official_matches(label, rxnorm_by_product, relationships_by_rxnorm):
@@ -245,7 +262,7 @@ async def _create_indexes(schema, evidence_cls, import_date):
     )
 
 
-async def _publish(schema, import_date):
+async def _publish(schema, import_date, consumed_dependencies):
     await db.status(f"DROP TABLE IF EXISTS {schema}.drug_condition_evidence;")
     await db.status(
         f"ALTER TABLE IF EXISTS {schema}.drug_condition_evidence_{import_date} RENAME TO drug_condition_evidence;"
@@ -259,6 +276,44 @@ async def _publish(schema, import_date):
         'idx_drug_condition_evidence_rxnorm',
     ]:
         await db.status(f"ALTER INDEX IF EXISTS {schema}.{prefix}_{import_date} RENAME TO {prefix};")
+    await publish_local_result_generation(
+        db,
+        importer_id="drug-indications",
+        schema=schema,
+        consumed_dependencies=consumed_dependencies,
+    )
+
+
+async def _build_evidence_stage(evidence_cls, schema, import_date, batch_size, test_limit, test_mode, run_id):
+    async with db.transaction():
+        label_dependency, ndc_dependency = await local_indication_dependencies(db, schema)
+        rxnorm_ids_by_product = await _rxnorm_ids_by_product()
+        relationships_by_rxnorm, clinical_dependency = await _load_official_condition_context(test_mode=test_mode)
+        consumed_dependencies = (
+            indication_dependencies(label_dependency, ndc_dependency, clinical_dependency)
+            if clinical_dependency is not None else None
+        )
+        scanned, matched = await _scan_condition_evidence(
+            evidence_cls,
+            rxnorm_ids_by_product,
+            relationships_by_rxnorm,
+            batch_size,
+            test_limit,
+            test_mode,
+            run_id,
+        )
+        await _create_indexes(schema, evidence_cls, import_date)
+        evidence_count = await db.select(db.func.count(evidence_cls.evidence_id)).scalar()
+        min_rows = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_MIN_ROWS', '0' if test_mode else '100'))
+        should_allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
+        if evidence_count < min_rows and not should_allow_empty:
+            raise RuntimeError(f"Drug indication stage has {evidence_count} rows, below minimum {min_rows}.")
+        should_publish_stage = _should_publish_stage(test_mode)
+        if should_publish_stage:
+            if consumed_dependencies is None:
+                raise RuntimeError("Clinical reference identity is unavailable for publication")
+            await _publish(schema, import_date, consumed_dependencies)
+    return scanned, matched, evidence_count, consumed_dependencies, should_publish_stage
 
 
 async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
@@ -280,31 +335,9 @@ async def import_drug_indications(test_mode=False, import_id=None, run_id=None):
     evidence_cls = make_class(DrugConditionEvidence, import_date)
     await db.status(f"DROP TABLE IF EXISTS {schema}.{evidence_cls.__tablename__};")
     await db.create_table(evidence_cls.__table__)
-
-    rxnorm_ids_by_product = await _rxnorm_ids_by_product()
-    relationships_by_rxnorm = await _load_official_condition_context(test_mode=test_mode)
-
-    scanned, matched = await _scan_condition_evidence(
-        evidence_cls,
-        rxnorm_ids_by_product,
-        relationships_by_rxnorm,
-        batch_size,
-        test_limit,
-        test_mode,
-        run_id,
+    scanned, matched, evidence_count, consumed_dependencies, should_publish_stage = await _build_evidence_stage(
+        evidence_cls, schema, import_date, batch_size, test_limit, test_mode, run_id
     )
-    await _create_indexes(schema, evidence_cls, import_date)
-
-    min_rows = int(os.getenv('HLTHPRT_DRUG_INDICATIONS_MIN_ROWS', '0' if test_mode else '100'))
-    should_allow_empty = os.getenv('HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY', '').lower() in {'1', 'true', 'yes'}
-    evidence_count = await db.select(db.func.count(evidence_cls.evidence_id)).scalar()
-    if evidence_count < min_rows and not should_allow_empty:
-        raise RuntimeError(f"Drug indication stage has {evidence_count} rows, below minimum {min_rows}.")
-
-    should_publish_stage = _should_publish_stage(test_mode)
-    if should_publish_stage:
-        async with db.transaction():
-            await _publish(schema, import_date)
 
     result_dict = {
         'import_id': import_date,
