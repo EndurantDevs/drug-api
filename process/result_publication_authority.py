@@ -24,9 +24,7 @@ DEPENDENCY_RELATIONS = {
     "clinical-reference": ("code_relationship", "code_catalog", "code_synonym"),
 }
 _KNOWN_RELATIONS = {
-    name
-    for names in (*RELATION_NAMES_BY_IMPORTER.values(), *DEPENDENCY_RELATIONS.values())
-    for name in names
+    name for names in (*RELATION_NAMES_BY_IMPORTER.values(), *DEPENDENCY_RELATIONS.values()) for name in names
 }
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _MAX_GENERATION = (1 << 63) - 1
@@ -93,7 +91,7 @@ def _importer_id(value: object) -> str:
 def _uuid_text(value: object) -> str:
     try:
         return str(UUID(str(value)))
-    except (AttributeError, TypeError, ValueError):
+    except AttributeError, TypeError, ValueError:
         raise ValueError("result publication lineage is invalid") from None
 
 
@@ -138,9 +136,9 @@ def _relation_oids(importer_id: str, value: object) -> tuple[int, ...]:
     if not isinstance(value, (list, tuple)) or len(value) != len(expected):
         raise ValueError("result publication relation identity is invalid")
     relation_oids = tuple(value)
-    if any(type(oid) is not int or not 0 < oid <= _MAX_OID for oid in relation_oids) or len(
-        set(relation_oids)
-    ) != len(relation_oids):
+    if any(type(oid) is not int or not 0 < oid <= _MAX_OID for oid in relation_oids) or len(set(relation_oids)) != len(
+        relation_oids
+    ):
         raise ValueError("result publication relation identity is invalid")
     return relation_oids
 
@@ -289,7 +287,7 @@ async def read_result_publication_authority(
         database,
         text(
             "SELECT importer_id, local_lineage_id, local_generation, origin_lineage_id, origin_generation, "
-            f"published_at, relation_oids, consumed_dependencies FROM \"{schema}\".\"{TABLE_NAME}\" "
+            f'published_at, relation_oids, consumed_dependencies FROM "{schema}"."{TABLE_NAME}" '
             "WHERE importer_id=:importer_id" + suffix
         ),
         importer_id=importer,
@@ -325,7 +323,7 @@ async def relation_identities(
             (str(_row_mapping(relation_row)["relation_name"]), int(_row_mapping(relation_row)["relation_oid"]))
             for relation_row in relation_rows
         )
-    except (KeyError, TypeError, ValueError, RuntimeError):
+    except KeyError, TypeError, ValueError, RuntimeError:
         raise RuntimeError("result publication relations are unavailable") from None
     if tuple(name for name, _oid in identities) != relation_names or any(
         not 0 < oid <= _MAX_OID for _name, oid in identities

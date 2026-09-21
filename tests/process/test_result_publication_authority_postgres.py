@@ -134,9 +134,7 @@ async def _create_live_indexes(connection, schema):
 
 
 async def _relation_state(connection, schema, table_name):
-    relation_oid = await connection.fetchval(
-        "SELECT to_regclass($1)::oid::bigint", f"{schema}.{table_name}"
-    )
+    relation_oid = await connection.fetchval("SELECT to_regclass($1)::oid::bigint", f"{schema}.{table_name}")
     if relation_oid is None:
         return None
     generation = await connection.fetchval(f'SELECT generation FROM "{schema}"."{table_name}"')
@@ -145,8 +143,8 @@ async def _relation_state(connection, schema, table_name):
 
 async def _authority_state(connection, schema):
     return await connection.fetchrow(
-        f'SELECT local_generation, origin_lineage_id, origin_generation, relation_oids, '
-        f'consumed_dependencies FROM "{schema}".result_publication_authority WHERE importer_id=\'label\''
+        f"SELECT local_generation, origin_lineage_id, origin_generation, relation_oids, "
+        f"consumed_dependencies FROM \"{schema}\".result_publication_authority WHERE importer_id='label'"
     )
 
 
@@ -159,8 +157,7 @@ async def _prepare_label_generations(connection, schema):
     with pytest.raises(asyncpg.CheckViolationError, match="result_publication_authority_shape_check"):
         async with connection.transaction():
             await connection.execute(
-                f'UPDATE "{schema}".result_publication_authority SET local_generation=1 '
-                "WHERE importer_id='label'"
+                f"UPDATE \"{schema}\".result_publication_authority SET local_generation=1 WHERE importer_id='label'"
             )
 
 
@@ -172,8 +169,7 @@ async def _assert_authority_constraint_rejects_nulls(connection, schema):
         ),
         (
             "drug-indications",
-            "origin_generation=1, consumed_dependencies="
-            "'{\"label\":{},\"ndc\":{},\"clinical-reference\":{}}'::jsonb",
+            'origin_generation=1, consumed_dependencies=\'{"label":{},"ndc":{},"clinical-reference":{}}\'::jsonb',
         ),
     )
     for importer_id, fields in invalid_updates:
@@ -226,10 +222,7 @@ def _create_dependency_tables(connection, schema):
         )
     )
     connection.execute(
-        text(
-            f'CREATE TABLE "{schema}".code_synonym ('
-            "code_system text, code text, synonym text, term_type text)"
-        )
+        text(f'CREATE TABLE "{schema}".code_synonym (code_system text, code text, synonym text, term_type text)')
     )
 
 
@@ -245,9 +238,7 @@ async def _assert_clinical_share_lock_supported(connection, schema):
             "SELECT has_table_privilege(current_user, $1, 'UPDATE')",
             f'"{schema}"."{relation}"',
         )
-    relationship_rows, term_rows, clinical = await drug_indications._read_clinical_rows(
-        connection, schema
-    )
+    relationship_rows, term_rows, clinical = await drug_indications._read_clinical_rows(connection, schema)
     assert relationship_rows == [] and term_rows == []
     assert [entry["name"] for entry in clinical["relations"]] == [
         "code_relationship",
@@ -399,18 +390,18 @@ async def test_downgrade_waits_for_writer_then_refuses_committed_evidence(monkey
             "WHERE importer_id='label'"
         )
         downgrade_task = asyncio.create_task(asyncio.to_thread(_run_downgrade, sync_engine))
-        await _wait_for_queued_lock(
-            observer, schema, "result_publication_authority", "AccessExclusiveLock"
-        )
+        await _wait_for_queued_lock(observer, schema, "result_publication_authority", "AccessExclusiveLock")
         assert not downgrade_task.done()
         await writer_transaction.commit()
         writer_transaction = None
 
         assert await downgrade_task == "result publication evidence prevents downgrade"
-        assert await observer.fetchval(
-            f'SELECT local_generation FROM "{schema}".result_publication_authority '
-            "WHERE importer_id='label'"
-        ) == 1
+        assert (
+            await observer.fetchval(
+                f"SELECT local_generation FROM \"{schema}\".result_publication_authority WHERE importer_id='label'"
+            )
+            == 1
+        )
     finally:
         if writer_transaction is not None:
             await writer_transaction.rollback()
