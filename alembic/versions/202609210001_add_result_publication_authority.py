@@ -87,12 +87,16 @@ def downgrade() -> None:
     schema = _schema()
     quoted_schema = op.get_bind().dialect.identifier_preparer.quote_schema(schema)
     op.execute(sa.text(f'LOCK TABLE {quoted_schema}."result_publication_authority" IN ACCESS EXCLUSIVE MODE'))
-    retained = op.get_bind().execute(
-        sa.text(
-            f'SELECT EXISTS (SELECT 1 FROM {quoted_schema}."result_publication_authority" '
-            "WHERE local_generation <> 0 OR origin_generation IS NOT NULL)"
+    retained = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                f'SELECT EXISTS (SELECT 1 FROM {quoted_schema}."result_publication_authority" '
+                "WHERE local_generation <> 0 OR origin_generation IS NOT NULL)"
+            )
         )
-    ).scalar_one()
+        .scalar_one()
+    )
     if retained:
         raise RuntimeError("result publication evidence prevents downgrade")
     op.drop_table("result_publication_authority", schema=schema)
