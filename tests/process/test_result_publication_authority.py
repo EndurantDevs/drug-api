@@ -1,5 +1,7 @@
 import datetime
 import importlib
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -436,3 +438,110 @@ async def test_indication_publication_rejects_missing_clinical_identity_before_s
         await drug_indications._build_evidence_stage(evidence_cls, "rx_data", "20260921", 100, 10, False, None)
 
     assert database.events == ["begin", "rollback"]
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("importer_id", "unknown"),
+        ("local_lineage_id", "not-a-uuid"),
+        ("local_generation", True),
+        ("local_generation", -1),
+        ("origin_generation", 0),
+        ("origin_generation", 1 << 63),
+        ("published_at", "invalid-date"),
+        ("published_at", datetime.datetime(2026, 9, 21)),
+        ("relation_oids", []),
+        ("relation_oids", [True]),
+        ("relation_oids", [1 << 32]),
+        ("consumed_dependencies", {"ndc": {}}),
+    ],
+)
+def test_persisted_authority_rejects_malformed_generation_and_relation_identity(field, invalid):
+    authority_row = _AuthorityDatabase().first_rows[1]
+    authority_row[field] = invalid
+    with pytest.raises(RuntimeError, match="result publication"):
+        authority.validate_result_publication_authority(authority_row)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["missing", "exhausted", "missing_update"])
+async def test_publication_fails_closed_without_writable_authority(fault):
+    database = _AuthorityDatabase()
+    if fault == "exhausted":
+        database.first_rows = [{**database.first_rows[1], "local_generation": (1 << 63) - 1}]
+    else:
+        database.first_rows[0 if fault == "missing" else 1] = None
+
+    with pytest.raises(RuntimeError, match="authority is unavailable|generation is exhausted"):
+        await authority.publish_local_result_generation(
+            database, importer_id="label", schema="rx_data", consumed_dependencies={}
+        )
+    assert (database.update_parameters is not None) == (fault == "missing_update")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "relation_rows",
+    [[], [{}], [{"relation_name": "label", "relation_oid": None}], [{"relation_name": "product", "relation_oid": 11}]],
+)
+async def test_dependency_capture_rejects_absent_or_misbound_catalog_relations(relation_rows):
+    database = _IdentityDatabase()
+    database.all_rows = [relation_rows]
+    with pytest.raises(RuntimeError, match="relations are unavailable"):
+        await authority.local_indication_dependencies(database, "rx_data")
+    assert database.lock.endswith(" IN ACCESS SHARE MODE")
+
+
+@pytest.mark.asyncio
+async def test_clinical_context_keeps_consumed_identity_and_closes_its_connection(monkeypatch):
+    dependency = _dependencies()["clinical-reference"]
+    connection = SimpleNamespace(close=AsyncMock())
+    read_rows = AsyncMock(
+        return_value=(
+            [
+                {
+                    "rxcui": "1",
+                    "condition_system": "SYNTHETIC",
+                    "condition_code": "C1",
+                    "relationship": "may_treat",
+                    "source_attribution": None,
+                }
+            ],
+            [
+                {
+                    "condition_system": "SYNTHETIC",
+                    "condition_code": "C1",
+                    "term": " Example  condition ",
+                    "term_type": "preferred",
+                }
+            ],
+            dependency,
+        )
+    )
+    monkeypatch.setattr(drug_indications.asyncpg, "connect", AsyncMock(return_value=connection))
+    monkeypatch.setattr(drug_indications, "_read_clinical_rows", read_rows)
+    monkeypatch.setenv("HLTHPRT_CLINICAL_DB_SCHEMA", "clinical_fixture")
+    relationships, captured = await drug_indications._load_official_condition_context()
+    assert captured == dependency
+    assert relationships["1"][0]["terms"] == [{"term": "example condition", "term_type": "preferred"}]
+    assert relationships["1"][0]["source_attribution"] == drug_indications.NLM_ATTRIBUTION
+    read_rows.assert_awaited_once_with(connection, "clinical_fixture")
+    connection.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("test_mode", [False, True])
+async def test_clinical_read_failure_closes_connection_and_never_fabricates_identity(monkeypatch, test_mode):
+    connection = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(drug_indications.asyncpg, "connect", AsyncMock(return_value=connection))
+    monkeypatch.setattr(
+        drug_indications, "_read_clinical_rows", AsyncMock(side_effect=RuntimeError("synthetic read failure"))
+    )
+    monkeypatch.delenv("HLTHPRT_DRUG_INDICATIONS_ALLOW_EMPTY", raising=False)
+    if test_mode:
+        assert await drug_indications._fetch_clinical_rows(test_mode=True) == ([], [], None)
+    else:
+        with pytest.raises(RuntimeError, match="Clinical terminology lookup failed: synthetic read failure"):
+            await drug_indications._fetch_clinical_rows()
+    connection.close.assert_awaited_once()
