@@ -13,6 +13,12 @@ FROM python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48
 
 ARG HLTHPRT_SOURCE_COMMIT
 LABEL org.opencontainers.image.revision=${HLTHPRT_SOURCE_COMMIT}
+RUN test "${#HLTHPRT_SOURCE_COMMIT}" -eq 40 \
+    && printf '%s' "${HLTHPRT_SOURCE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$' \
+    && test "${HLTHPRT_SOURCE_COMMIT}" != "0000000000000000000000000000000000000000" \
+    && install -d -o root -g root -m 0755 /opt/healthporta/build-identity \
+    && printf '%s\n' "${HLTHPRT_SOURCE_COMMIT}" > /opt/healthporta/build-identity/drug-source-commit \
+    && chmod 0444 /opt/healthporta/build-identity/drug-source-commit
 
 WORKDIR /opt
 RUN apt-get update \

@@ -107,6 +107,9 @@ class _Database:
         self.statements.append(statement)
         self.events.append("ddl")
 
+    async def first(self, *_args, **_kwargs):
+        return {"allowed": True}
+
 
 @pytest.mark.asyncio
 async def test_label_publication_advances_authority_before_atomic_commit(monkeypatch):
@@ -140,6 +143,16 @@ async def test_label_publication_authority_failure_rolls_back_the_swap(monkeypat
 
     assert database.events[-1] == "rollback"
     assert "commit" not in database.events
+
+
+@pytest.mark.asyncio
+async def test_ordinary_label_finalizer_rejects_protected_heap_before_ddl(monkeypatch):
+    database = _Database()
+    monkeypatch.setattr(database, "first", AsyncMock(return_value={"allowed": False}))
+    with pytest.raises(RuntimeError, match="ordinary Label publication is disabled"):
+        await label_publish.publish_label_table(database, "rx_data", "20260921")
+    assert database.statements == []
+    assert database.events == ["begin", "rollback"]
 
 
 @pytest.mark.asyncio
