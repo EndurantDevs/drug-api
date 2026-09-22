@@ -275,6 +275,7 @@ async def test_label_shutdown_publishes_suffixed_label_table_inside_transaction(
     monkeypatch.setattr(label, "mark_control_run", fake_mark_control_run)
     monkeypatch.setattr(label, "print_time_info", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("process.label_publish.publish_local_result_generation", fake_mark_control_run)
+    monkeypatch.setattr("process.label_publish.require_label_ordinary_publication", fake_mark_control_run)
 
     context_dict = {
         "import_date": "20260213",

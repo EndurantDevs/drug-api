@@ -2,12 +2,13 @@
 
 from typing import Any
 
-from process.result_publication_authority import publish_local_result_generation
+from process.result_publication_authority import publish_local_result_generation, require_label_ordinary_publication
 
 
 async def publish_label_table(database: Any, db_schema: str, import_date: str) -> None:
     """Create indexes and swap the staged label table into service."""
     async with database.transaction():
+        await require_label_ordinary_publication(database, db_schema)
         print('Creating indexes..')
         await database.status(
             f"CREATE INDEX idx_product_ndc_{import_date} ON "
