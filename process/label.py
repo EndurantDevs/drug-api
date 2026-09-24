@@ -43,9 +43,9 @@ def _label_row_dict_from_record(label_record: dict, label_columns: list[str]) ->
     label_row_dict: dict[str, object] = {}
     for label_column in label_columns:
         if label_column == 'openfda':
-            openfda_dict = label_record.get(label_column, {})
-            label_row_dict['product_ndc'] = openfda_dict.get('product_ndc', [])
-            label_row_dict['package_ndc'] = openfda_dict.get('package_ndc', [])
+            continue
+        if label_column in ('product_ndc', 'package_ndc'):
+            label_row_dict[label_column] = (label_record.get('openfda') or {}).get(label_column, [])
             continue
         label_row_dict[label_column] = _label_column_value(label_record, label_column)
     return label_row_dict
