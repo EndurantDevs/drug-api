@@ -10,6 +10,7 @@ import pytest
 from db.drug_snapshot_runtime import publication
 from db.drug_snapshot_runtime.label import Label as ArchiveLabel
 from db.models import Label, db
+from process.label import _label_row_dict_from_record
 
 
 def test_label_model_preserves_application_metadata_and_full_columns():
@@ -20,6 +21,22 @@ def test_label_model_preserves_application_metadata_and_full_columns():
         assert str(application.type) == str(archive.type)
         assert application.nullable == archive.nullable
         assert application.primary_key == archive.primary_key
+
+
+def test_label_projection_keeps_nested_ndc_arrays_after_all_columns():
+    columns = list(Label.__table__.columns.keys())
+    label_record_dict = {
+        "id": "synthetic-label",
+        "openfda": {
+            "product_ndc": ["00000-001"],
+            "package_ndc": ["00000-001-01"],
+        },
+    }
+
+    row = _label_row_dict_from_record(label_record_dict, columns)
+
+    assert row["product_ndc"] == ["00000-001"]
+    assert row["package_ndc"] == ["00000-001-01"]
 
 
 def test_archive_model_and_publication_do_not_boot_an_application():
