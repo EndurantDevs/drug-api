@@ -18,14 +18,22 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
-    - name: Install Python
-      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-      with:
-        python-version: 3.14.7
     - name: Install pinned uv
-      run: "printf '%s\\n' 'uv==0.12.17 --hash=sha256:9e25bb39e1674799c408345a6397ebc2c7c719d498be0ce9d935466d36ceacf5' |\n\
-        \  python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin\n\
-        test \"$(uv --version | awk '{print $2}')\" = 0.12.17\n"
+      run: "#!/usr/bin/env bash\nset -euo pipefail\n\nuv_directory=$(mktemp -d \"$RUNNER_TEMP/uv-0.12.17.XXXXXX\")\ncleanup()\
+        \ {\n  local status=$?\n  rm -f -- \"$uv_directory/archive.tar.gz\"\n  if [ \"$status\" -ne 0 ]; then rm -rf -- \"\
+        $uv_directory\"; fi\n  exit \"$status\"\n}\ntrap cleanup EXIT\ncurl --fail --location --retry 3 \\\n  --output \"\
+        $uv_directory/archive.tar.gz\" \\\n  https://github.com/astral-sh/uv/releases/download/0.12.17/uv-x86_64-unknown-linux-gnu.tar.gz\n\
+        printf '%s  %s\\n' \\\n  fa82fd8dde8e8eefdecada6aa0889666556cfceb690d06e0c3bca49eb3070a63 \\\n  \"$uv_directory/archive.tar.gz\"\
+        \ | sha256sum --check --strict\ntar -xzf \"$uv_directory/archive.tar.gz\" -C \"$uv_directory\" --strip-components=1\
+        \ \\\n  uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx\ntest \"$(\"$uv_directory/uv\" --version |\
+        \ awk '{print $2}')\" = 0.12.17\nprintf '%s\\n' \"$uv_directory\" >> \"$GITHUB_PATH\"\n"
+    - name: Install uv-managed Python
+      run: "#!/usr/bin/env bash\nset -euo pipefail\n\ntest \"$(uv --no-config --version | awk '{print $2}')\" = 0.12.17\n\
+        python_directory=$(mktemp -d \"$RUNNER_TEMP/uv-python.XXXXXX\")\ncleanup() {\n  local status=$?\n  if [ \"$status\"\
+        \ -ne 0 ]; then rm -rf -- \"$python_directory\"; fi\n  exit \"$status\"\n}\ntrap cleanup EXIT\nuv --no-config venv\
+        \ --managed-python --python 3.14.7 \"$python_directory/venv\"\nprintf '%s\\n' \"$python_directory/venv/bin\" >> \"\
+        $GITHUB_PATH\"\nprintf 'VIRTUAL_ENV=%s\\nUV_PYTHON_PREFERENCE=only-managed\\n' \"$python_directory/venv\" >> \"$GITHUB_ENV\"\
+        \n"
     - name: Sync locked runtime and test dependencies
       run: uv sync --locked --no-default-groups --group test
     - name: Check public repository hygiene
@@ -43,7 +51,7 @@ jobs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
       image_artifact_id: ${{ steps.image-artifact.outputs.artifact-id }}
     env:
-      CI_REVISION: d3b64ea96c8477a35cdcbe3f7996f1b4c5f78da5
+      CI_REVISION: 4013213ffec891177fa7145161e23bb8336dade8
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -51,9 +59,13 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: d3b64ea96c8477a35cdcbe3f7996f1b4c5f78da5
+        ref: 4013213ffec891177fa7145161e23bb8336dade8
         path: ci
         persist-credentials: false
+    - name: Install pinned uv
+      run: bash "$CI_ROOT/scripts/install_uv"
+    - name: Install uv-managed Python
+      run: bash "$CI_ROOT/scripts/setup_python"
     - name: Resolve exact public source event
       id: source
       env:
@@ -77,13 +89,6 @@ jobs:
         git -C "$SOURCE_ROOT" merge-base --is-ancestor "$BASE_SHA" HEAD
 
         '
-    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-      with:
-        python-version: 3.14.7
-    - name: Install pinned uv
-      run: "printf '%s\\n' 'uv==0.12.17 --hash=sha256:9e25bb39e1674799c408345a6397ebc2c7c719d498be0ce9d935466d36ceacf5' |\n\
-        \  python -m pip install --disable-pip-version-check --no-deps --only-binary=:all: --require-hashes -r /dev/stdin\n\
-        test \"$(uv --version | awk '{print $2}')\" = 0.12.17\n"
     - name: Run complete public source validation
       env:
         PUBLIC_CI_ARTIFACT_ROOT: ${{ runner.temp }}/drug-public-measurement
@@ -121,7 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: d3b64ea96c8477a35cdcbe3f7996f1b4c5f78da5
+      CI_REVISION: 4013213ffec891177fa7145161e23bb8336dade8
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -129,9 +134,13 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: d3b64ea96c8477a35cdcbe3f7996f1b4c5f78da5
+        ref: 4013213ffec891177fa7145161e23bb8336dade8
         path: ci
         persist-credentials: false
+    - name: Install pinned uv
+      run: bash "$CI_ROOT/scripts/install_uv"
+    - name: Install uv-managed Python
+      run: bash "$CI_ROOT/scripts/setup_python"
     - name: Resolve exact public source event
       env:
         GH_TOKEN: ${{ github.token }}
@@ -192,7 +201,7 @@ jobs:
       actions: read
       packages: write
     env:
-      CI_REVISION: d3b64ea96c8477a35cdcbe3f7996f1b4c5f78da5
+      CI_REVISION: 4013213ffec891177fa7145161e23bb8336dade8
       PYTHONDONTWRITEBYTECODE: '1'
       IMAGE_ARTIFACT_ID: ${{ needs.validate.outputs.image_artifact_id }}
       MEASUREMENT_ARTIFACT_ID: ${{ needs.publish.outputs.measurement_artifact_id }}
@@ -201,9 +210,13 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: d3b64ea96c8477a35cdcbe3f7996f1b4c5f78da5
+        ref: 4013213ffec891177fa7145161e23bb8336dade8
         path: ci
         persist-credentials: false
+    - name: Install pinned uv
+      run: bash ci/scripts/install_uv
+    - name: Install uv-managed Python
+      run: bash ci/scripts/setup_python
     - name: Authenticate DEV image input
       id: image
       env:
@@ -272,9 +285,13 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: d3b64ea96c8477a35cdcbe3f7996f1b4c5f78da5
+        ref: 4013213ffec891177fa7145161e23bb8336dade8
         path: ci
         persist-credentials: false
+    - name: Install pinned uv
+      run: bash ci/scripts/install_uv
+    - name: Install uv-managed Python
+      run: bash ci/scripts/setup_python
     - name: Remove validated CI intermediates
       env:
         GH_TOKEN: ${{ github.token }}

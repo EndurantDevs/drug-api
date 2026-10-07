@@ -88,27 +88,18 @@ GitHub CI is the full-validation gate; no local aggregate gate is required.
 
 ## Python quality
 
-Ruff is the Python linter, import sorter, and formatter. The repository checks
-correctness across Python source and import order across the established isort
-scope:
+Ruff is the Python linter, import sorter, and formatter:
 
 ```bash
 uv run --locked ruff check --select E9,F api db process scripts tests main.py
 uv run --locked ruff check --select I api db process tests main.py
-uv run --locked ruff format --check <new-python-paths>
+uv run --locked ruff format --check tests/test_public_ci.py
 ```
 
-Pylint retains all existing error checks and adds member inference for product
-code. Tests keep the existing `no-member` exception because their runtime
-monkeypatches cannot be inferred statically:
-
-```bash
-uv run --locked pylint --errors-only api db process main.py
-uv run --locked pylint --source-roots=. --errors-only --disable=no-member tests
-```
-
-CI enforces formatting for newly added Python files against the exact target
-base, including renames. Existing files are not automatically reformatted;
-adopt them in reviewed groups only after checking the readability budget.
+Run the import-order and formatting checks on the Python files you changed.
+CI requires sorted imports and formatting for added or modified Python files.
+Only touched files need adoption; unrelated historical files retain their
+readability baseline. Runtime import smoke tests and the existing application
+and import tests validate actual dependency APIs and source-module imports.
 The readability budget remains the naming and complexity policy, and its
 physical-line limits must not be relaxed to accommodate wrapping.
