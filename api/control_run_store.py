@@ -31,7 +31,7 @@ async def update_import_run_after_enqueue(
     run_id: str,
     enqueue_update: dict[str, Any],
 ) -> int:
-    """Persist queue metadata without overwriting an already claimed NDC run."""
+    """Persist queue metadata only while a native run remains unclaimed and queued."""
     update_values_dict = {**enqueue_update, **_json_fields(enqueue_update)}
     changed = await db.status(
         text(
@@ -42,6 +42,8 @@ async def update_import_run_after_enqueue(
          WHERE run_id = :run_id
            AND (importer <> 'ndc' OR (status='queued'
                     AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id')))
+           AND (importer <> 'label' OR (status='queued'
+                    AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'label_attempt_id')))
         """
         ),
         run_id=run_id,
