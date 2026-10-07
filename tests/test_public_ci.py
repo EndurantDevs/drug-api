@@ -154,9 +154,9 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
     assert set(revision) != {"0"}
     for job_id, job in workflow["jobs"].items():
         label = labels_by_job[job_id]
-        if job_id == "smoke":
+        if job_id in {"smoke", "publish"}:
             assert job["name"] == label
-            assert job["if"] == "${{ success() }}"
+            assert job["if"] == ("${{ always() }}" if job_id == "publish" else "${{ success() }}")
         else:
             assert job["name"] == "${{ " + metadata_only + f" && '{label} (metadata only)' || '{label}' " + "}}"
             assert job["if"] == "${{ !(" + metadata_only + ") && (success()) }}"
@@ -179,6 +179,26 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
             assert job["env"]["CI_REVISION"] == revision
     assert workflow["jobs"]["publish"]["needs"] == "validate"
     assert workflow["jobs"]["dev-image-publication"]["needs"] == ["smoke", "publish", "validate"]
+
+
+def test_metadata_coverage_requires_full_validation():
+    """Keep metadata coverage bound to full validation within the existing timeout."""
+    path = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    metadata_only = (
+        "github.event_name == 'pull_request' && github.event.action == 'edited' "
+        "&& !github.event.changes.title && !github.event.changes.base"
+    )
+    coverage = workflow["jobs"]["publish"]
+    assert coverage["timeout-minutes"] == 10
+    gate = coverage["steps"][0]
+    assert gate["name"] == "Require complete public validation"
+    assert gate["env"]["METADATA_ONLY"] == "${{ " + metadata_only + " }}"
+    assert gate["env"]["RESULTS"] == "${{ toJSON(needs.*.result) }}"
+    assert "SECONDS + 540" in gate["run"]
+    assert "--paginate --slurp" in gate["run"]
+    assert "sort_by([(.run_started_at // .created_at), .id, .run_attempt])" in gate["run"]
+    assert all(step["if"] == "${{ !(" + metadata_only + ") && (success()) }}" for step in coverage["steps"][1:])
 
 
 def test_artifacts_expire_after_one_day_and_keep_exact_producer_bindings():

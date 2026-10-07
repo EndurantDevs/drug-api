@@ -31,9 +31,11 @@ jobs:
       run: "#!/usr/bin/env bash\nset -euo pipefail\n\ntest \"$(uv --no-config --version | awk '{print $2}')\" = 0.12.17\n\
         python_directory=$(mktemp -d \"$RUNNER_TEMP/uv-python.XXXXXX\")\ncleanup() {\n  local status=$?\n  if [ \"$status\"\
         \ -ne 0 ]; then rm -rf -- \"$python_directory\"; fi\n  exit \"$status\"\n}\ntrap cleanup EXIT\nuv --no-config venv\
-        \ --managed-python --python 3.14.7 \"$python_directory/venv\"\nprintf '%s\\n' \"$python_directory/venv/bin\" >> \"\
-        $GITHUB_PATH\"\nprintf 'VIRTUAL_ENV=%s\\nUV_PYTHON_PREFERENCE=only-managed\\n' \"$python_directory/venv\" >> \"$GITHUB_ENV\"\
-        \n"
+        \ --managed-python --python 3.14.7 \"$python_directory/venv\"\npython_library=$(\"$python_directory/venv/bin/python\"\
+        \ -c 'import sysconfig; print(sysconfig.get_config_var(\"LIBDIR\"))')\ntest -d \"$python_library\"\nprintf '%s\\n'\
+        \ \"$python_directory/venv/bin\" >> \"$GITHUB_PATH\"\nprintf 'VIRTUAL_ENV=%s\\nUV_PYTHON_PREFERENCE=only-managed\\\
+        n' \"$python_directory/venv\" >> \"$GITHUB_ENV\"\nprintf 'LD_LIBRARY_PATH=%s%s\\n' \"$python_library\" \"${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\
+        \ >> \"$GITHUB_ENV\"\n"
     - name: Sync locked runtime and test dependencies
       run: uv sync --locked --no-default-groups --group test
     - name: Check public repository hygiene
@@ -51,7 +53,7 @@ jobs:
       staging_artifact_id: ${{ steps.staging.outputs.artifact-id }}
       image_artifact_id: ${{ steps.image-artifact.outputs.artifact-id }}
     env:
-      CI_REVISION: 4013213ffec891177fa7145161e23bb8336dade8
+      CI_REVISION: 89ce7be11cc667f4ea3211b770c09f737061bf1f
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
@@ -59,7 +61,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 4013213ffec891177fa7145161e23bb8336dade8
+        ref: 89ce7be11cc667f4ea3211b770c09f737061bf1f
         path: ci
         persist-credentials: false
     - name: Install pinned uv
@@ -120,31 +122,61 @@ jobs:
     if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
       && (success()) }}
   publish:
-    name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
-      && 'Coverage results (metadata only)' || 'Coverage results' }}
+    name: Coverage results
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      CI_REVISION: 4013213ffec891177fa7145161e23bb8336dade8
+      CI_REVISION: 89ce7be11cc667f4ea3211b770c09f737061bf1f
       CI_ROOT: ${{ github.workspace }}/ci
       SOURCE_ROOT: ${{ github.workspace }}/source
     steps:
+    - name: Require complete public validation
+      env:
+        GH_TOKEN: ${{ github.token }}
+        METADATA_ONLY: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title
+          && !github.event.changes.base }}
+        PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+        SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        RESULTS: ${{ toJSON(needs.*.result) }}
+      run: "if [ \"$METADATA_ONLY\" != true ]; then\n  jq -e 'length > 0 and all(. == \"success\")' <<< \"$RESULTS\"\n  exit\
+        \ 0\nfi\n\ndeadline=$((SECONDS + 540))\nwhile :; do\n  if ! validation_state=\"$(\n    set -o pipefail\n    gh api\
+        \ --paginate --slurp \\\n      \"repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$SOURCE_SHA&per_page=100\"\
+        \ | jq --raw-output '[.[] | .workflow_runs[]\n        | select(.name == \"CI\" and .display_title == \"CI\")\n   \
+        \     | select(any(.pull_requests[]?; .number == (env.PR_NUMBER | tonumber) and .head.sha == env.SOURCE_SHA and .base.sha\
+        \ == env.BASE_SHA))\n        | {run_started_at, created_at, id, run_attempt, status, conclusion}]\n        | sort_by([(.run_started_at\
+        \ // .created_at), .id, .run_attempt])\n        | last\n        | if . == null then \"pending\"\n          elif .status\
+        \ != \"completed\" then \"pending\"\n          elif .conclusion == \"success\" then \"success\"\n          else \"\
+        failed\"\n          end'\n  )\"; then\n    validation_state=pending\n  fi\n  case \"$validation_state\" in\n    success)\
+        \ exit 0 ;;\n    failed)\n      printf 'No successful full validation exists for source %s at base %s.\\n' \"$SOURCE_SHA\"\
+        \ \"$BASE_SHA\" >&2\n      exit 1\n      ;;\n    pending)\n      if (( SECONDS >= deadline )); then\n        printf\
+        \ 'Timed out waiting for full validation of source %s at base %s.\\n' \"$SOURCE_SHA\" \"$BASE_SHA\" >&2\n        exit\
+        \ 1\n      fi\n      sleep 15\n      ;;\n    *)\n      printf 'Unexpected full-validation state: %s.\\n' \"$validation_state\"\
+        \ >&2\n      exit 1\n      ;;\n  esac\ndone\n"
     - name: Check out pinned public validation
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 4013213ffec891177fa7145161e23bb8336dade8
+        ref: 89ce7be11cc667f4ea3211b770c09f737061bf1f
         path: ci
         persist-credentials: false
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     - name: Install pinned uv
       run: bash "$CI_ROOT/scripts/install_uv"
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     - name: Install uv-managed Python
       run: bash "$CI_ROOT/scripts/setup_python"
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     - name: Resolve exact public source event
       env:
         GH_TOKEN: ${{ github.token }}
       run: python3 ci/scripts/source_identity.py
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     - name: Check out source file inventory
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -152,12 +184,16 @@ jobs:
         ref: ${{ env.SOURCE_SHA }}
         path: source
         persist-credentials: false
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     - name: Download exact completed validation data
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
       with:
         artifact-ids: ${{ needs.validate.outputs.staging_artifact_id }}
         path: ${{ runner.temp }}/drug-staging
         merge-multiple: true
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     - name: Validate and package public measurement
       run: 'test "$SOURCE_REPOSITORY" = EndurantDevs/drug-api
 
@@ -168,6 +204,8 @@ jobs:
         python3 ci/scripts/drug/measurement.py "$RUNNER_TEMP/drug-staging" "$RUNNER_TEMP/drug-public-measurement"
 
         '
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     - name: Upload public measurement
       id: measurement-artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -182,10 +220,11 @@ jobs:
           '
         if-no-files-found: error
         retention-days: 1
+      if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
+        && (success()) }}
     outputs:
       measurement_artifact_id: ${{ steps.measurement-artifact.outputs.artifact-id }}
-    if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
-      && (success()) }}
+    if: ${{ always() }}
   dev-image-publication:
     name: ${{ github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base
       && 'DEV image publication (metadata only)' || 'DEV image publication' }}
@@ -201,7 +240,7 @@ jobs:
       actions: read
       packages: write
     env:
-      CI_REVISION: 4013213ffec891177fa7145161e23bb8336dade8
+      CI_REVISION: 89ce7be11cc667f4ea3211b770c09f737061bf1f
       PYTHONDONTWRITEBYTECODE: '1'
       IMAGE_ARTIFACT_ID: ${{ needs.validate.outputs.image_artifact_id }}
       MEASUREMENT_ARTIFACT_ID: ${{ needs.publish.outputs.measurement_artifact_id }}
@@ -210,7 +249,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 4013213ffec891177fa7145161e23bb8336dade8
+        ref: 89ce7be11cc667f4ea3211b770c09f737061bf1f
         path: ci
         persist-credentials: false
     - name: Install pinned uv
@@ -285,7 +324,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: EndurantDevs/endurant-ci
-        ref: 4013213ffec891177fa7145161e23bb8336dade8
+        ref: 89ce7be11cc667f4ea3211b770c09f737061bf1f
         path: ci
         persist-credentials: false
     - name: Install pinned uv
