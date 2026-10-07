@@ -38,7 +38,11 @@ def test_public_ci_is_hosted_with_bounded_permissions_and_runs_import_checks():
     assert workflow.get("on", workflow.get(True))["push"] == {"branches": ["main", "dev"]}
     assert workflow["permissions"] == {"contents": "read", "pull-requests": "read", "actions": "read"}
     assert set(workflow["jobs"]) == {
-        "smoke", "validate", "publish", "dev-image-publication", "artifact-cleanup",
+        "smoke",
+        "validate",
+        "publish",
+        "dev-image-publication",
+        "artifact-cleanup",
     }
     job = workflow["jobs"]["smoke"]
     assert job["runs-on"] == "ubuntu-latest"
@@ -50,23 +54,25 @@ def test_public_ci_is_hosted_with_bounded_permissions_and_runs_import_checks():
     assert "uv sync --locked --no-default-groups --group test" in commands
     assert "uv run --locked --no-default-groups --group test --no-sync pytest -q" in commands
     assert "test_process_" in commands or "tests/process/" in commands
-    setup_python = next(step for step in job["steps"] if step.get("name") == "Install Python")
-    assert setup_python == {
-        "name": "Install Python",
-        "uses": "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97",
-        "with": {"python-version": "3.14.7"},
-    }
+    managed_python = next(step for step in job["steps"] if step.get("name") == "Install uv-managed Python")
+    assert set(managed_python) == {"name", "run"}
+    assert "uv --no-config venv --managed-python --python 3.14.7" in managed_python["run"]
+    assert '"$RUNNER_TEMP/uv-python.XXXXXX"' in managed_python["run"]
+    assert '"$GITHUB_PATH"' in managed_python["run"]
+    assert '"$GITHUB_ENV"' in managed_python["run"]
+    assert "actions/setup-python@" not in text
     bootstrap = next(step for step in job["steps"] if step.get("name") == "Install pinned uv")
-    assert bootstrap["run"] == (
-        "printf '%s\\n' 'uv==0.12.17 "
-        "--hash=sha256:9e25bb39e1674799c408345a6397ebc2c7c719d498be0ce9d935466d36ceacf5' |\n"
-        "  python -m pip install --disable-pip-version-check --no-deps "
-        "--only-binary=:all: --require-hashes -r /dev/stdin\n"
-        "test \"$(uv --version | awk '{print $2}')\" = 0.12.17\n"
+    assert set(bootstrap) == {"name", "run"}
+    assert (
+        "https://github.com/astral-sh/uv/releases/download/0.12.17/uv-x86_64-unknown-linux-gnu.tar.gz"
+        in bootstrap["run"]
     )
-    assert "pip install" not in "\n".join(
-        step.get("run", "") for step in job["steps"] if step is not bootstrap
-    )
+    assert "fa82fd8dde8e8eefdecada6aa0889666556cfceb690d06e0c3bca49eb3070a63" in bootstrap["run"]
+    assert "sha256sum --check --strict" in bootstrap["run"]
+    assert "uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx" in bootstrap["run"]
+    assert '"$GITHUB_PATH"' in bootstrap["run"]
+
+    assert "pip install" not in "\n".join(step.get("run", "") for step in job["steps"])
     assert all(token not in text for token in ("secrets.", "vars.", "ghcr.io", "workflow_dispatch", "self-hosted"))
     for step in job["steps"]:
         assert not step.get("continue-on-error")
@@ -81,30 +87,41 @@ def test_stale_artifact_cleanup_is_main_only_and_pinned():
     workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
     revision = yaml.safe_load((path.parent / "ci.yml").read_text())["jobs"]["validate"]["env"]["CI_REVISION"]
     assert workflow.get("on", workflow.get(True)) == {
-        "schedule": [{"cron": "31 2 * * *"}], "workflow_dispatch": None,
+        "schedule": [{"cron": "31 2 * * *"}],
+        "workflow_dispatch": None,
     }
     assert workflow["permissions"] == {
-        "contents": "read", "pull-requests": "read", "actions": "write",
+        "contents": "read",
+        "pull-requests": "read",
+        "actions": "write",
     }
     assert workflow["concurrency"] == {
-        "group": "public-artifact-cleanup", "cancel-in-progress": False,
+        "group": "public-artifact-cleanup",
+        "cancel-in-progress": False,
     }
     assert set(workflow["jobs"]) == {"stale-cleanup"}
     job = workflow["jobs"]["stale-cleanup"]
-    assert job["if"] == (
-        "github.repository == 'EndurantDevs/drug-api' && github.ref == 'refs/heads/main'"
-    )
+    assert job["if"] == ("github.repository == 'EndurantDevs/drug-api' && github.ref == 'refs/heads/main'")
     assert job["runs-on"] == "ubuntu-latest"
     assert job["timeout-minutes"] == 15
     assert job["steps"] == [
-        {"name": "Check out trusted artifact lifecycle",
-         "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-         "with": {"repository": "EndurantDevs/endurant-ci",
-                  "ref": revision, "path": "ci",
-                  "persist-credentials": False}},
-        {"name": "Delete only obsolete authenticated artifacts",
-         "env": {"GH_TOKEN": "${{ github.token }}", "PYTHONDONTWRITEBYTECODE": "1"},
-         "run": "python3 ci/scripts/artifact_cleanup.py --stale"},
+        {
+            "name": "Check out trusted artifact lifecycle",
+            "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "with": {
+                "repository": "EndurantDevs/endurant-ci",
+                "ref": revision,
+                "path": "ci",
+                "persist-credentials": False,
+            },
+        },
+        {"name": "Install pinned uv", "run": "bash ci/scripts/install_uv"},
+        {"name": "Install uv-managed Python", "run": "bash ci/scripts/setup_python"},
+        {
+            "name": "Delete only obsolete authenticated artifacts",
+            "env": {"GH_TOKEN": "${{ github.token }}", "PYTHONDONTWRITEBYTECODE": "1"},
+            "run": "python3 ci/scripts/artifact_cleanup.py --stale",
+        },
     ]
 
 
@@ -118,15 +135,20 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
     assert workflow["run-name"] == "${{ " + metadata_only + " && 'CI metadata update' || 'CI' }}"
     assert workflow["concurrency"] == {
         "group": (
-            "${{ " + metadata_only
+            "${{ "
+            + metadata_only
             + " && format('ci-metadata-{0}', github.event.pull_request.number) || github.event_name == 'push' "
             + "&& format('ci-push-{0}', github.run_id) || format('ci-{0}', github.ref) }}"
         ),
         "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
     }
-    labels_by_job = {"smoke": "portable import checks", "validate": "Tests and build",
-                     "publish": "Coverage results", "dev-image-publication": "DEV image publication",
-                     "artifact-cleanup": "CI artifact cleanup"}
+    labels_by_job = {
+        "smoke": "portable import checks",
+        "validate": "Tests and build",
+        "publish": "Coverage results",
+        "dev-image-publication": "DEV image publication",
+        "artifact-cleanup": "CI artifact cleanup",
+    }
     revision = workflow["jobs"]["validate"]["env"]["CI_REVISION"]
     assert re.fullmatch(r"[0-9a-f]{40}", revision)
     assert set(revision) != {"0"}
@@ -143,7 +165,10 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
         assert not job.get("continue-on-error")
         if job_id == "dev-image-publication":
             assert job["permissions"] == {
-                "contents": "read", "pull-requests": "read", "actions": "read", "packages": "write",
+                "contents": "read",
+                "pull-requests": "read",
+                "actions": "read",
+                "packages": "write",
             }
         elif job_id == "artifact-cleanup":
             assert job["permissions"] == {"contents": "read", "actions": "write"}
@@ -164,16 +189,29 @@ def test_artifacts_expire_after_one_day_and_keep_exact_producer_bindings():
     assert cleanup["needs"] == ["dev-image-publication", "validate", "publish"]
     assert cleanup["timeout-minutes"] == 10
     assert cleanup["steps"] == [
-        {"name": "Check out trusted cleanup helper",
-         "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-         "with": {"repository": "EndurantDevs/endurant-ci", "ref": revision,
-                  "path": "ci", "persist-credentials": False}},
-        {"name": "Remove validated CI intermediates",
-         "env": {"GH_TOKEN": "${{ github.token }}", "PYTHONDONTWRITEBYTECODE": "1",
-                 "IMAGE_ARTIFACT_ID": "${{ needs.validate.outputs.image_artifact_id }}",
-                 "MEASUREMENT_ARTIFACT_ID": "${{ needs.publish.outputs.measurement_artifact_id }}",
-                 "IMAGE_RECEIPT_ARTIFACT_ID": "${{ needs.dev-image-publication.outputs.receipt_artifact_id }}"},
-         "run": "python3 ci/scripts/artifact_cleanup.py"},
+        {
+            "name": "Check out trusted cleanup helper",
+            "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "with": {
+                "repository": "EndurantDevs/endurant-ci",
+                "ref": revision,
+                "path": "ci",
+                "persist-credentials": False,
+            },
+        },
+        {"name": "Install pinned uv", "run": "bash ci/scripts/install_uv"},
+        {"name": "Install uv-managed Python", "run": "bash ci/scripts/setup_python"},
+        {
+            "name": "Remove validated CI intermediates",
+            "env": {
+                "GH_TOKEN": "${{ github.token }}",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "IMAGE_ARTIFACT_ID": "${{ needs.validate.outputs.image_artifact_id }}",
+                "MEASUREMENT_ARTIFACT_ID": "${{ needs.publish.outputs.measurement_artifact_id }}",
+                "IMAGE_RECEIPT_ARTIFACT_ID": "${{ needs.dev-image-publication.outputs.receipt_artifact_id }}",
+            },
+            "run": "python3 ci/scripts/artifact_cleanup.py",
+        },
     ]
     for job in jobs.values():
         for step in job["steps"]:
