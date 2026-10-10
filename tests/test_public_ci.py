@@ -156,7 +156,7 @@ def test_shared_validation_is_pinned_and_metadata_edits_preserve_real_checks():
         label = labels_by_job[job_id]
         if job_id in {"smoke", "publish"}:
             assert job["name"] == label
-            assert job["if"] == ("${{ always() }}" if job_id == "publish" else "${{ success() }}")
+            assert job["if"] == ("${{ !cancelled() }}" if job_id == "publish" else "${{ success() }}")
         else:
             assert job["name"] == "${{ " + metadata_only + f" && '{label} (metadata only)' || '{label}' " + "}}"
             assert job["if"] == "${{ !(" + metadata_only + ") && (success()) }}"
