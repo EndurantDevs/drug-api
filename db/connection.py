@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import inspect
 import os
@@ -153,6 +154,7 @@ class Database:
     engine: Any = None
     session_factory: Any = None
     func: FuncProxy = field(init=False, repr=False)
+    _connection_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     Model = Base
     text = staticmethod(sa_text)
@@ -162,50 +164,56 @@ class Database:
         self.func = FuncProxy()
 
     async def connect(self) -> None:
-        """Initialize the async SQLAlchemy engine and session factory."""
-        if self.engine is not None:
-            return
+        """Verify a database connection before exposing the engine and sessions."""
+        async with self._connection_lock:
+            if self.engine is not None:
+                return
 
-        driver = os.getenv("HLTHPRT_DB_DRIVER") or os.getenv("DB_DRIVER") or "postgresql+asyncpg"
-        if driver == "asyncpg":
-            driver = "postgresql+asyncpg"
-        if driver != "postgresql+asyncpg":
-            raise RuntimeError(f"drug-api requires SQLAlchemy asyncpg driver, got {driver!r}")
+            driver = os.getenv("HLTHPRT_DB_DRIVER") or os.getenv("DB_DRIVER") or "postgresql+asyncpg"
+            if driver == "asyncpg":
+                driver = "postgresql+asyncpg"
+            if driver != "postgresql+asyncpg":
+                raise RuntimeError(f"drug-api requires SQLAlchemy asyncpg driver, got {driver!r}")
 
-        url = URL.create(
-            drivername=driver,
-            username=os.getenv("HLTHPRT_DB_USER") or os.getenv("DB_USER") or "postgres",
-            password=os.getenv("HLTHPRT_DB_PASSWORD") or os.getenv("DB_PASSWORD") or "",
-            host=os.getenv("HLTHPRT_DB_HOST") or os.getenv("DB_HOST") or "127.0.0.1",
-            port=int(os.getenv("HLTHPRT_DB_PORT") or os.getenv("DB_PORT") or "5432"),
-            database=os.getenv("HLTHPRT_DB_DATABASE") or os.getenv("DB_DATABASE") or "postgres",
-        )
+            url = URL.create(
+                drivername=driver,
+                username=os.getenv("HLTHPRT_DB_USER") or os.getenv("DB_USER") or "postgres",
+                password=os.getenv("HLTHPRT_DB_PASSWORD") or os.getenv("DB_PASSWORD") or "",
+                host=os.getenv("HLTHPRT_DB_HOST") or os.getenv("DB_HOST") or "127.0.0.1",
+                port=int(os.getenv("HLTHPRT_DB_PORT") or os.getenv("DB_PORT") or "5432"),
+                database=os.getenv("HLTHPRT_DB_DATABASE") or os.getenv("DB_DATABASE") or "postgres",
+            )
 
-        pool_min = int(os.getenv("HLTHPRT_DB_POOL_MIN_SIZE") or os.getenv("DB_POOL_MIN_SIZE") or "1")
-        pool_max = int(os.getenv("HLTHPRT_DB_POOL_MAX_SIZE") or os.getenv("DB_POOL_MAX_SIZE") or "10")
-        pool_size = max(pool_min, 1)
-        max_overflow = max(pool_max - pool_size, 0)
+            pool_min = int(os.getenv("HLTHPRT_DB_POOL_MIN_SIZE") or os.getenv("DB_POOL_MIN_SIZE") or "1")
+            pool_max = int(os.getenv("HLTHPRT_DB_POOL_MAX_SIZE") or os.getenv("DB_POOL_MAX_SIZE") or "10")
+            pool_size = max(pool_min, 1)
+            max_overflow = max(pool_max - pool_size, 0)
 
-        self.engine = create_async_engine(
-            url,
-            pool_size=pool_size,
-            max_overflow=max_overflow,
-            echo=_is_env_enabled(os.getenv("HLTHPRT_DB_ECHO") or os.getenv("DB_ECHO")),
-            pool_pre_ping=True,
-        )
-        self.session_factory = async_sessionmaker(
-            self.engine,
-            expire_on_commit=False,
-            autoflush=False,
-        )
+            engine = create_async_engine(
+                url,
+                pool_size=pool_size,
+                max_overflow=max_overflow,
+                echo=_is_env_enabled(os.getenv("HLTHPRT_DB_ECHO") or os.getenv("DB_ECHO")),
+                pool_pre_ping=True,
+            )
+            try:
+                async with engine.connect() as connection:
+                    await connection.execute(sa_text("SELECT 1"))
+                session_factory = async_sessionmaker(engine, expire_on_commit=False, autoflush=False)
+            except BaseException:
+                await engine.dispose()
+                raise
+            self.engine = engine
+            self.session_factory = session_factory
 
     async def disconnect(self) -> None:
         """Dispose the async engine and clear the session factory."""
-        if self.engine is None:
-            return
-        await self.engine.dispose()
-        self.engine = None
-        self.session_factory = None
+        async with self._connection_lock:
+            if self.engine is None:
+                return
+            await self.engine.dispose()
+            self.engine = None
+            self.session_factory = None
 
     def select(self, *columns: Any):
         """Build a select adapter for the requested columns or model."""
@@ -263,9 +271,7 @@ class Database:
         async with self.engine.begin() as connection:
             if table.schema:
                 preparer = connection.dialect.identifier_preparer
-                await connection.exec_driver_sql(
-                    f"CREATE SCHEMA IF NOT EXISTS {preparer.quote_schema(table.schema)}"
-                )
+                await connection.exec_driver_sql(f"CREATE SCHEMA IF NOT EXISTS {preparer.quote_schema(table.schema)}")
             await connection.run_sync(table.create, **kwargs)
 
     async def execute_ddl(self, statement: str) -> None:
@@ -325,7 +331,8 @@ class Database:
 
     def init_app(self, app) -> None:
         """Register Sanic lifecycle hooks and per-request session middleware."""
-        @app.listener("after_server_start")
+
+        @app.listener("before_server_start")
         async def _on_start(_, __):
             await self.connect()
 
