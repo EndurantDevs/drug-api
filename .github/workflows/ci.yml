@@ -100,7 +100,7 @@ jobs:
     - name: Upload tested DEV image
       id: image-artifact
       if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: drug-public-image-staging-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/drug-public-image-staging-${{ github.run_id }}-${{ github.run_attempt }}/
@@ -109,7 +109,7 @@ jobs:
         compression-level: 0
     - name: Upload public coverage staging data
       id: staging
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: drug-public-staging-${{ github.run_id }}-${{ github.run_attempt }}
         path: 'source/test-coverage-python.json
@@ -187,7 +187,7 @@ jobs:
       if: ${{ !(github.event_name == 'pull_request' && github.event.action == 'edited' && !github.event.changes.title && !github.event.changes.base)
         && (success()) }}
     - name: Download exact completed validation data
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         artifact-ids: ${{ needs.validate.outputs.staging_artifact_id }}
         path: ${{ runner.temp }}/drug-staging
@@ -208,7 +208,7 @@ jobs:
         && (success()) }}
     - name: Upload public measurement
       id: measurement-artifact
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: drug-public-measurement-${{ github.run_id }}-${{ github.run_attempt }}
         path: '${{ runner.temp }}/drug-public-measurement/test-coverage-python.json
@@ -263,7 +263,7 @@ jobs:
       run: python3 ci/scripts/source_image.py prepare
     - name: Download validated image archive
       if: steps.image.outputs.publish == 'true'
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         artifact-ids: ${{ steps.image.outputs.artifact_id }}
         digest-mismatch: error
@@ -276,7 +276,7 @@ jobs:
       run: python3 ci/scripts/source_image.py stage
     - name: Upload DEV image publication intent
       if: steps.image.outputs.publish == 'true'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: drug-public-image-intent-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/public-image-intent/intent.json
@@ -290,7 +290,7 @@ jobs:
     - name: Upload DEV image receipt
       if: steps.image.outputs.publish == 'true'
       id: receipt-artifact
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: drug-public-image-${{ github.run_id }}-${{ github.run_attempt }}
         path: ${{ runner.temp }}/public-image-receipt/image.json
