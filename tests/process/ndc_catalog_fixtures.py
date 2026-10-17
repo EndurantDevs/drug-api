@@ -39,6 +39,21 @@ def column_catalog(model):
     ]
 
 
+def installed_index_catalog(name):
+    """Recorded complete NDC indexes, independent of the reader's expected contract."""
+    key = "product_id" if name == "product" else "package_ndc"
+    contracts = [("btree", key, "text_ops", "pg_catalog", "default", True, True)]
+    contracts.append(("gin", "product_ndc", "varchar_ops", "btree_gin", "default", False, False))
+    if name == "product":
+        contracts.extend(
+            ("gin", column, "gin_trgm_ops", "pg_trgm", "default", False, False)
+            for column in ("brand_name", "generic_name")
+        )
+        contracts.append(("gin", "rxnorm_ids", "array_ops", "pg_catalog", "default", False, False))
+    fields = ("method", "column_name", "opclass", "provider", "collation", "is_primary", "is_unique")
+    return [dict(zip(fields, contract, strict=True), is_safe=True) for contract in contracts]
+
+
 class RecordedDependencyCatalog:
     """Return fixed catalog rows and record every query, COPY and lock request."""
 
@@ -57,24 +72,18 @@ class RecordedDependencyCatalog:
         self.buffers = {name: (f"synthetic-{name}\n".encode(),) for name in MODELS}
         self.physical = {"product": 101, "package": 102}
         self.canonical = {
-            name: oid + (100 if mode == "alias" else 200 if mode == "adopted" else 0)
+            name: oid + (100 if mode in {"alias", "adopted-alias"} else 200 if mode == "adopted" else 0)
             for name, oid in self.physical.items()
         }
         self.safe = True
         self.ownership = True
         self.completion = "COPY 1"
-        self.kinds = {oid: "v" if mode == "alias" else "r" for oid in self.canonical.values()}
+        self.kinds = {oid: "v" if mode in {"alias", "adopted-alias"} else "r" for oid in self.canonical.values()}
         self.native = self._native_publication()
-        self.receipt = (
-            self.native
-            if mode != "adopted"
-            else {
-                "contract": "ndc.csv.v1",
-                "source_publication": {"native_publication": self.native},
-                "publication_state": "adopted",
-                "tables": {name: {"relation_oid": oid} for name, oid in self.canonical.items()},
-            }
-        )
+        if mode == "adopted-alias":
+            self.physical = {"product": 401, "package": 402}
+        self.receipt = self._adoption_receipt() if mode in {"adopted", "adopted-alias"} else self.native
+        self.indexes_by_oid = {oid: installed_index_catalog(name) for name, oid in self.physical.items()}
         self.comments = {oid: json.dumps(self.receipt) for oid in self.canonical.values()}
         self.column_rows = {
             oid: column_catalog(MODELS[name]) for name in MODELS for oid in (self.canonical[name], self.physical[name])
@@ -87,6 +96,25 @@ class RecordedDependencyCatalog:
             "params": "{}",
         }
         self.projections = {oid: self._projection(name, oid) for name, oid in self.canonical.items()}
+
+    def _adoption_receipt(self):
+        """Record local custody separately from the unchanged original native publication."""
+        adopted_tables_by_name = {name: {"relation_oid": oid} for name, oid in self.canonical.items()}
+        if self.mode == "adopted-alias":
+            adopted_tables_by_name = {
+                name: {
+                    "relation_oid": oid,
+                    **{field: self.native["tables"][name][field] for field in ("row_count", "size_bytes", "sha256")},
+                    "columns": [list(column.values()) for column in self.native["tables"][name]["columns"]],
+                }
+                for name, oid in self.physical.items()
+            }
+        return {
+            "contract": "ndc.csv.v1",
+            "source_publication": {"native_publication": self.native},
+            "publication_state": "adopted",
+            "tables": adopted_tables_by_name,
+        }
 
     def _native_publication(self):
         return {
@@ -216,16 +244,17 @@ class RecordedDependencyCatalog:
             return deepcopy(self.run)
         if "SELECT p.relname" in statement:
             name = self._name(arguments[0])
-            assert arguments == (self.canonical[name], self.physical[name], self.schema)
             return (
                 {"relation_name": name + "_heap", "schema_name": self.schema, "namespace_oid": 71}
-                if self.ownership
+                if self.ownership and arguments == (self.canonical[name], self.physical[name], self.schema)
                 else None
             )
         raise AssertionError("unexpected catalog record: " + statement)
 
     async def fetch(self, statement, *arguments):
         self.queries.append((statement, arguments))
+        if "SELECT am.amname AS method" in statement:
+            return self.indexes_by_oid[arguments[0]]
         if "SELECT attname AS name" in statement:
             return self.column_rows[arguments[0]]
         if "SELECT a.attnum" in statement:

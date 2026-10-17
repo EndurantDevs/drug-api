@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 from sqlalchemy.dialects import postgresql
 
 from . import projection_catalog
+from .model_indexes import model_index_input
 from .ndc import Package, Product
 
 _MODELS = {"product": Product, "package": Package}
@@ -132,8 +134,8 @@ async def capture_ndc_dependency(driver, *, schema):
             raise ValueError("NDC dependency source publication must be an object")
         native = source_publication.get("native_publication")
     _require_complete_native_origin(native)
-    if kinds == ["v", "v"] and receipt is native:
-        physical_by_name = await _require_dependency_aliases(driver, schema, physical_by_name, native)
+    if kinds == ["v", "v"]:
+        physical_by_name = await _require_publication_aliases(driver, schema, physical_by_name, receipt, native)
     elif kinds == ["r", "r"]:
         for oid in physical_by_name.values():
             await _require_dependency_heap(driver, oid)
@@ -344,11 +346,51 @@ def model_projection(schema, name):
     return SimpleNamespace(schema_name=schema, relation_name=name, columns=tuple(columns))
 
 
-async def _require_dependency_aliases(driver, schema, canonical_oids, native):
+def _adopted_alias_oids(receipt, native):
+    """Bind receiving heap OIDs and payloads without rewriting the original native origin."""
+    tables = receipt.get("tables")
+    if receipt.get("publication_state") != "adopted" or type(tables) is not dict or set(tables) != set(_MODELS):
+        raise ValueError("NDC dependency adopted view custody differs")
+    physical_by_name = {}
+    for name, adopted in tables.items():
+        if type(adopted) is not dict:
+            raise ValueError("NDC dependency adopted view custody must be an object")
+        oid = adopted.get("relation_oid")
+        expected = native["tables"][name]
+        if (
+            type(oid) is not int
+            or not 0 < oid < 2**32
+            or any(type(adopted.get(field)) is not int for field in ("row_count", "size_bytes"))
+            or any(adopted.get(field) != expected[field] for field in ("row_count", "size_bytes", "sha256"))
+            or _canonical(adopted.get("columns"))
+            != _canonical([[column["name"], column["type"], column["not_null"]] for column in expected["columns"]])
+        ):
+            raise ValueError("NDC dependency adopted view custody differs")
+        physical_by_name[name] = oid
+    if len(set(physical_by_name.values())) != len(_MODELS):
+        raise ValueError("NDC dependency adopted view pair differs")
+    return physical_by_name
+
+
+async def _require_publication_aliases(driver, schema, canonical_oids, receipt, native):
+    """Keep native authority unchanged and check adopted physical custody before any COPY."""
+    backing_by_name = (
+        {name: native["tables"][name]["oid"] for name in _MODELS}
+        if receipt is native
+        else _adopted_alias_oids(receipt, native)
+    )
+    physical_by_name = await _require_dependency_aliases(driver, schema, canonical_oids, backing_by_name)
+    if receipt is not native:
+        for name, physical_oid in physical_by_name.items():
+            await _require_installed_indexes(driver, name, physical_oid)
+    return physical_by_name
+
+
+async def _require_dependency_aliases(driver, schema, canonical_oids, backing_by_name):
     """Verify inert protected aliases before COPY can expand their definitions."""
     physical_by_name = {}
     for name, alias_oid in canonical_oids.items():
-        physical_oid = native["tables"][name]["oid"]
+        physical_oid = backing_by_name[name]
         await _require_dependency_heap(driver, physical_oid)
         physical = await _require_alias_ownership(driver, alias_oid, physical_oid, schema)
         alias = model_projection(schema, name)
@@ -363,6 +405,77 @@ async def _require_dependency_aliases(driver, schema, canonical_oids, native):
         )
         physical_by_name[name] = physical_oid
     return physical_by_name
+
+
+def _installed_index_contract(name):
+    """Use only the real NDC model's single-column keys and lookup declarations."""
+    model = _MODELS[name]
+    key = tuple(model.__table__.primary_key.columns)[0].name
+    contracts = [("btree", key, "text_ops", "pg_catalog", "default", True, True)]
+    for declaration in model.__my_additional_indexes__:
+        if (
+            set(declaration) != {"name", "staging_name", "index_elements", "using"}
+            or declaration["using"] != "gin"
+            or len(declaration["index_elements"]) != 1
+        ):
+            raise ValueError("NDC dependency model index declaration differs")
+        method, opclass, column = model_index_input(model, declaration["using"], declaration["index_elements"][0])
+        if opclass == "gin_trgm_ops" and column in {"brand_name", "generic_name"}:
+            provider = "pg_trgm"
+        elif column == "product_ndc" and opclass is None:
+            opclass, provider = "varchar_ops", "btree_gin"
+        elif column == "rxnorm_ids" and opclass is None:
+            opclass, provider = "array_ops", "pg_catalog"
+        else:
+            raise ValueError("NDC dependency model index declaration differs")
+        contracts.append((method, column, opclass, provider, "default", False, False))
+    return Counter(contracts)
+
+
+async def _require_installed_indexes(driver, name, physical_oid):
+    """Check the complete receiving model indexes set-wise before expanding either view."""
+    indexes = await driver.fetch(_INSTALLED_INDEX_SQL, physical_oid)
+    observed = Counter(tuple(index[field] for field in _INDEX_FIELDS) for index in indexes)
+    if any(index["is_safe"] is not True for index in indexes) or observed != _installed_index_contract(name):
+        raise RuntimeError("NDC dependency adopted view indexes differ")
+
+
+_INDEX_FIELDS = ("method", "column_name", "opclass", "provider", "collation", "is_primary", "is_unique")
+_INSTALLED_INDEX_SQL = """
+SELECT am.amname AS method,a.attname AS column_name,opc.opcname AS opclass,
+ CASE WHEN opc.opcnamespace='pg_catalog'::pg_catalog.regnamespace THEN 'pg_catalog'
+ ELSE (SELECT e.extname FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_extension e ON e.oid=d.refobjid
+  WHERE d.classid='pg_catalog.pg_opclass'::pg_catalog.regclass AND d.objid=opc.oid
+  AND d.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass
+  AND d.deptype='e') END AS provider,
+ coll.collname AS collation,i.indisprimary AS is_primary,i.indisunique AS is_unique,
+ (i.indisvalid AND i.indisready AND i.indislive AND NOT i.indcheckxmin AND NOT i.indisexclusion
+  AND NOT i.indnullsnotdistinct AND i.indnatts=1 AND i.indnkeyatts=1 AND i.indoption[0]=0
+  AND i.indexprs IS NULL AND i.indpred IS NULL AND ic.relkind='i' AND ic.relpersistence='p'
+  AND ic.relowner=heap.relowner AND opc.opcmethod=ic.relam AND family.opfmethod=ic.relam
+  AND coll.collnamespace='pg_catalog'::pg_catalog.regnamespace
+  AND NOT pg_catalog.pg_has_role(current_user,opc.opcowner,'MEMBER')
+  AND NOT pg_catalog.pg_has_role(current_user,family.opfowner,'MEMBER')
+  AND (opc.opcnamespace='pg_catalog'::pg_catalog.regnamespace OR EXISTS(
+   SELECT 1 FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_extension e ON e.oid=d.refobjid
+   WHERE d.classid='pg_catalog.pg_opclass'::pg_catalog.regclass AND d.objid=opc.oid
+   AND d.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass
+   AND d.deptype='e' AND e.extname IN ('pg_trgm','btree_gin')
+   AND NOT pg_catalog.pg_has_role(current_user,e.extowner,'MEMBER')))
+  AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_amproc support JOIN pg_catalog.pg_proc p ON p.oid=support.amproc
+   WHERE support.amprocfamily=family.oid AND pg_catalog.pg_has_role(current_user,p.proowner,'MEMBER'))
+  AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_amop member JOIN pg_catalog.pg_operator op ON op.oid=member.amopopr
+   JOIN pg_catalog.pg_proc p ON p.oid=op.oprcode WHERE member.amopfamily=family.oid
+   AND (pg_catalog.pg_has_role(current_user,op.oprowner,'MEMBER')
+    OR pg_catalog.pg_has_role(current_user,p.proowner,'MEMBER')))) AS is_safe
+FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid
+JOIN pg_catalog.pg_class heap ON heap.oid=i.indrelid JOIN pg_catalog.pg_am am ON am.oid=ic.relam
+LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=i.indkey[0]
+JOIN pg_catalog.pg_opclass opc ON opc.oid=i.indclass[0]
+JOIN pg_catalog.pg_opfamily family ON family.oid=opc.opcfamily
+LEFT JOIN pg_catalog.pg_collation coll ON coll.oid=i.indcollation[0]
+WHERE i.indrelid=$1 LIMIT 8
+"""
 
 
 async def _require_alias_ownership(driver, alias_oid, physical_oid, schema):

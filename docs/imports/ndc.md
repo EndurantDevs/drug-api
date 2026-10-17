@@ -57,6 +57,32 @@ same transaction. An ownership or terminal-status mismatch rolls back publicatio
 The receipt describes a native publication, not an independently signed authority
 against a privileged database owner.
 
+### Read-only dependency capture
+
+`drug_snapshot_runtime.ndc_publication.capture_ndc_dependency` requires an existing
+read-only, repeatable-read transaction. It supports the native heap pair, the
+protected native view pair, and received snapshots carrying the existing paired
+`ndc.csv.v1` adopted receipt. For received views, each receipt table identifies the
+receiver's backing heap with `relation_oid`, `row_count`, `size_bytes`, `sha256`
+and `columns`. `columns` is the ordered list of `[name, type, not_null]` arrays,
+not the native receipt's column-object form.
+`source_publication.native_publication` remains the unchanged original native
+receipt. Both views must carry the same complete adopted receipt. The
+installer must commit those comments with its protected alias switch; canonical
+view OIDs are not backing heap identities.
+
+Received views use the same fixed product/package projections, same-schema
+protected ownership and dependency checks as native views. The reader also checks
+the complete locally declared primary-key/GIN indexes and trusted operator-class
+code before scanning either view. A received snapshot does not create or require
+a local execution of the original producer. The four-field
+`ndc-native-dependency.v1` result still hashes the original native receipt and
+product/package payloads, not receiver-local OIDs.
+
+Capture performs full counts and ordered native COPY audits of both tables on
+every invocation, including native and legacy routes. It is a producer dependency
+capture API, not a constant-time API lookup or a persistent validation cache.
+
 Test/sample mode records an `ndc_sample` result with `complete=false` and
 `published=false`, then drops its owned stages in the same transaction; it never
 replaces serving data. After a failure, the coordinator has a separate ten-second
