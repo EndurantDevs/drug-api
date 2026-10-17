@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from api.control_run_store import insert_import_run, update_import_run_after_enqueue
 from db.models import db
 from process.import_status_events import enqueue_status_event
+from process.label_stage import is_label_publication_protected, validate_label_run_id
 from process.live_progress import (
     enqueue_live_progress,
     estimate_payload_from_live,
@@ -200,6 +201,9 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
     spec = _IMPORTERS.get(importer)
     if spec is None:
         raise ValueError(f"unknown importer: {importer}")
+    run_id = str(run_request.get("run_id") or "").strip() or f"run_{uuid.uuid4().hex}"
+    if importer == "label":
+        validate_label_run_id(run_id)
     await ensure_import_run_table()
     schema = _schema()
     idempotency_key = str(run_request.get("idempotency_key") or "").strip() or None
@@ -208,19 +212,23 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
         if active:
             return active, False
     now = utc_now()
-    run_id = str(run_request.get("run_id") or "").strip() or f"run_{uuid.uuid4().hex}"
     run_record_dict = _run_record_from_request(run_request, importer, spec, run_id, idempotency_key, now)
     try:
-        await insert_import_run(schema, run_record_dict)
+        if importer == "label":
+            active = await _admit_label_run(schema, run_record_dict)
+            if active:
+                return active, False
+        else:
+            await insert_import_run(schema, run_record_dict)
+            if importer == "ndc":
+                async with db.session() as session:
+                    await session.commit()
     except IntegrityError:
         if idempotency_key:
             active = await _find_active_by_idempotency_key(idempotency_key)
             if active:
                 return active, False
         raise
-    if importer == "ndc":
-        async with db.session() as session:
-            await session.commit()
     enqueue_update = await _enqueue(spec, run_record_dict)
     if await update_import_run_after_enqueue(schema, run_id, enqueue_update) != 1:
         current_run = await get_import_run(run_id)
@@ -231,6 +239,25 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
     enqueue_status_event(created_run_dict)
     _write_run_live_progress(created_run_dict, publish_event=False)
     return created_run_dict, True
+
+
+async def _admit_label_run(schema: str, run_record_dict: dict[str, Any]) -> dict[str, Any] | None:
+    """Serialize Label admission with ownership changes and other protected runs."""
+    async with db.session() as session:
+        # The publisher holds SHARE here while changing publication ownership.
+        await db.status(text(f"LOCK TABLE ONLY {schema}.import_run IN ROW EXCLUSIVE MODE"))
+        if await is_label_publication_protected(db, schema):
+            await db.scalar(text("SELECT pg_advisory_xact_lock(hashtext(:schema), hashtext('label'))"), schema=schema)
+            active = await db.first(text(f"""
+                SELECT * FROM {schema}.import_run WHERE importer='label'
+                  AND status NOT IN ('succeeded','failed','canceled','cancelled','dead_letter')
+                ORDER BY created_at LIMIT 1
+            """))
+            if active:
+                return _row_to_dict(active)
+        await insert_import_run(schema, run_record_dict)
+        await session.commit()
+    return None
 
 
 def _run_record_from_request(
@@ -342,6 +369,8 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
              WHERE run_id = :run_id
                AND (importer <> 'ndc' OR (status='queued'
                     AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id')))
+               AND (importer <> 'label' OR (status='queued'
+                    AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'label_attempt_id')))
             """
             ),
             run_id=run_id,
@@ -440,6 +469,9 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
 
 def _overlay_live_progress(data: dict[str, Any]) -> dict[str, Any]:
     if data.get("status") not in ACTIVE_STATUSES:
+        return data
+    metrics = data.get("metrics")
+    if data.get("status") == "finalizing" and isinstance(metrics, dict) and "label_completed_stage" in metrics:
         return data
     live = read_live_progress(str(data.get("run_id") or ""))
     if not live:

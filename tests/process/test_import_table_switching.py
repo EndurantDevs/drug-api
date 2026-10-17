@@ -2,6 +2,7 @@ import datetime
 import importlib
 import os
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -27,9 +28,7 @@ async def _seed_ndc_generations(database, schema):
             f"CREATE TABLE {schema}.product{suffix} (product_ndc text, brand_name text, "
             "generic_name text, rxnorm_ids text[], generation text)"
         )
-        await database.status(
-            f"CREATE TABLE {schema}.package{suffix} (product_ndc text, generation text)"
-        )
+        await database.status(f"CREATE TABLE {schema}.package{suffix} (product_ndc text, generation text)")
         await database.status(
             f"INSERT INTO {schema}.product{suffix} VALUES "
             "('00001-0001', 'Example', 'Example', ARRAY['1'], :generation)",
@@ -42,17 +41,13 @@ async def _seed_ndc_generations(database, schema):
         if generation == "incoming":
             continue
         for table, index, columns in _NDC_INDEXES:
-            await database.status(
-                f"CREATE INDEX {index}{suffix} ON {schema}.{table}{suffix} USING GIN({columns})"
-            )
+            await database.status(f"CREATE INDEX {index}{suffix} ON {schema}.{table}{suffix} USING GIN({columns})")
 
 
 @pytest.fixture
 async def ndc_publication_database():
     database_name = os.getenv("HLTHPRT_DB_DATABASE", "")
-    if os.getenv("HLTHPRT_ENVIRONMENT") != "test" or not (
-        "test" in database_name or database_name.endswith("_ci")
-    ):
+    if os.getenv("HLTHPRT_ENVIRONMENT") != "test" or not ("test" in database_name or database_name.endswith("_ci")):
         pytest.skip("requires an explicitly configured disposable PostgreSQL test database")
     database = Database()
     schema = f"ndc_publish_test_{uuid.uuid4().hex}"
@@ -80,12 +75,16 @@ async def _ndc_generation_state(database, schema, suffix):
         state_by_table[table] = {
             "oid": await database.scalar("SELECT CAST(:name AS regclass)::oid", name=relation),
             "generation": await database.scalar(f"SELECT generation FROM {relation}"),
-            "indexes": tuple((await database.execute(
-                "SELECT c.relname, c.oid, i.indisvalid FROM pg_index i "
-                "JOIN pg_class c ON c.oid = i.indexrelid "
-                "WHERE i.indrelid = CAST(:name AS regclass) ORDER BY c.relname",
-                name=relation,
-            )).all()),
+            "indexes": tuple(
+                (
+                    await database.execute(
+                        "SELECT c.relname, c.oid, i.indisvalid FROM pg_index i "
+                        "JOIN pg_class c ON c.oid = i.indexrelid "
+                        "WHERE i.indrelid = CAST(:name AS regclass) ORDER BY c.relname",
+                        name=relation,
+                    )
+                ).all()
+            ),
         }
     return state_by_table
 
@@ -94,8 +93,9 @@ async def _ndc_generation_state(database, schema, suffix):
 @pytest.mark.parametrize("fail_package", [False, True], ids=["success", "package_failure"])
 async def test_ndc_publication_preserves_generations_and_indexes(ndc_publication_database, monkeypatch, fail_package):
     database, schema = ndc_publication_database
-    before_by_suffix = {suffix: await _ndc_generation_state(database, schema, suffix)
-                        for suffix in ("", "_old", "_20260909")}
+    before_by_suffix = {
+        suffix: await _ndc_generation_state(database, schema, suffix) for suffix in ("", "_old", "_20260909")
+    }
     publish_single = ndc_publish._publish_single_ndc_table
 
     async def fail_after_product(database, db_schema, table, import_date):
@@ -119,8 +119,10 @@ async def test_ndc_publication_preserves_generations_and_indexes(ndc_publication
     for table in ("product", "package"):
         assert previous[table]["oid"] == before_by_suffix[""][table]["oid"]
         assert previous[table]["generation"] == "current"
-        assert tuple((name.removesuffix("_old"), oid, valid)
-                     for name, oid, valid in previous[table]["indexes"]) == before_by_suffix[""][table]["indexes"]
+        assert (
+            tuple((name.removesuffix("_old"), oid, valid) for name, oid, valid in previous[table]["indexes"])
+            == before_by_suffix[""][table]["indexes"]
+        )
         assert await database.scalar("SELECT to_regclass(:name)", name=f"{schema}.{table}_20260909") is None
         removed_oids = [before_by_suffix["_old"][table]["oid"]] + [
             index_row[1] for index_row in before_by_suffix["_old"][table]["indexes"]
@@ -235,8 +237,11 @@ async def test_ndc_legacy_publication_indexes_stages_before_serving_changes_in_o
     assert fake_db.events.count(("begin", None)) == 1
     assert fake_db.events.count(("commit", None)) == 1
     transaction_start = fake_db.events.index(("begin", None))
-    index_positions = [index for index, (event, statement) in enumerate(fake_db.events)
-                       if event == "status" and statement.startswith("CREATE INDEX ")]
+    index_positions = [
+        index
+        for index, (event, statement) in enumerate(fake_db.events)
+        if event == "status" and statement.startswith("CREATE INDEX ")
+    ]
     first_serving_change = fake_db.events.index(("status", "DROP TABLE IF EXISTS rx_data.product_old;"))
     assert len(index_positions) == 5
     assert transaction_start < min(index_positions) <= max(index_positions) < first_serving_change
@@ -255,6 +260,7 @@ async def test_label_startup_creates_suffixed_label_table(monkeypatch):
 
     monkeypatch.setattr(label, "db", fake_db)
     monkeypatch.setattr(label, "init_db", fake_init_db)
+    monkeypatch.setattr(label, "is_label_publication_protected", AsyncMock(return_value=False))
 
     context_dict = {}
     await label.label_startup(context_dict)
@@ -262,6 +268,9 @@ async def test_label_startup_creates_suffixed_label_table(monkeypatch):
     import_date = context_dict["import_date"]
     assert [table.name for table in fake_db.created_tables] == [f"label_{import_date}"]
     assert f"DROP TABLE IF EXISTS rx_data.label_{import_date};" in fake_db.statements
+    next_context_dict = {}
+    await label.label_startup(next_context_dict)
+    assert next_context_dict["import_date"] == import_date
 
 
 @pytest.mark.asyncio
@@ -303,19 +312,24 @@ async def test_drug_indications_publish_switches_staging_table(monkeypatch):
     monkeypatch.setattr(drug_indications, "db", fake_db)
     monkeypatch.setattr(drug_indications, "publish_local_result_generation", fake_publish)
 
-    await drug_indications._publish("rx_data", "20260213", {
-        "format": "drug-result-consumed-dependencies-v1",
-        "label": {"relations": [{"name": "label", "oid": 1}]},
-        "ndc": {"relations": [{"name": "product", "oid": 2}]},
-        "clinical-reference": {"relations": [
-            {"name": "code_relationship", "oid": 3},
-            {"name": "code_catalog", "oid": 4},
-            {"name": "code_synonym", "oid": 5},
-        ]},
-    })
+    await drug_indications._publish(
+        "rx_data",
+        "20260213",
+        {
+            "format": "drug-result-consumed-dependencies-v1",
+            "label": {"relations": [{"name": "label", "oid": 1}]},
+            "ndc": {"relations": [{"name": "product", "oid": 2}]},
+            "clinical-reference": {
+                "relations": [
+                    {"name": "code_relationship", "oid": 3},
+                    {"name": "code_catalog", "oid": 4},
+                    {"name": "code_synonym", "oid": 5},
+                ]
+            },
+        },
+    )
 
     assert "DROP TABLE IF EXISTS rx_data.drug_condition_evidence;" in fake_db.statements
     assert (
-        "ALTER TABLE IF EXISTS rx_data.drug_condition_evidence_20260213 "
-        "RENAME TO drug_condition_evidence;"
+        "ALTER TABLE IF EXISTS rx_data.drug_condition_evidence_20260213 RENAME TO drug_condition_evidence;"
     ) in fake_db.statements

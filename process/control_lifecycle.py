@@ -246,6 +246,7 @@ async def mark_control_run(
          WHERE run_id = :run_id
            {cancel_guard}
            AND (importer <> 'ndc' OR NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id'))
+           AND (importer <> 'label' OR NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'label_attempt_id'))
         """
         ),
         run_id=run_id,
@@ -380,6 +381,9 @@ def _native_result_status(control_task: ControlTask, result: Any) -> str:
     if (control_task.target_module == "process.ndc_product" and isinstance(result, dict)
             and result.get("format") == "ndc-publication-v1" and result.get("run_id") == control_task.run_id):
         return "succeeded"
+    if (control_task.target_module == "process.label" and isinstance(result, dict)
+            and result.get("format") == "label-completed-stage-v1" and result.get("run_id") == control_task.run_id):
+        return "finalizing"
     return "running"
 
 
