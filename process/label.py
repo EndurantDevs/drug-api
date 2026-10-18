@@ -14,6 +14,7 @@ from db.models import Label, db
 from process.control_lifecycle import mark_control_run
 from process.ext.utils import download_it, make_class, print_time_info, push_objects
 from process.label_publish import publish_label_table
+from process.label_stage import is_label_publication_protected, protected_label_import
 from process.live_progress import enqueue_live_progress
 from process.partition_download import PartitionDownloadSpec, download_partition_content
 from process.redis_config import redis_settings
@@ -36,6 +37,8 @@ LABEL_DOWNLOAD_SPEC = PartitionDownloadSpec(
 
 async def download_label_content(ctx, task):
     """Download one FDA label partition and enqueue parse batches."""
+    if ctx.get('context', {}).get('label_protected_mode'):
+        raise RuntimeError("protected Label attempts require coordinator-owned batches")
     return await download_partition_content(ctx, task, LABEL_DOWNLOAD_SPEC)
 
 
@@ -64,6 +67,8 @@ def _label_column_value(label_record: dict, label_column: str) -> object:
 
 async def process_label_results(ctx, task):
     """Normalize FDA label records and insert them into the dated import table."""
+    if ctx.get('context', {}).get('label_protected_mode'):
+        raise RuntimeError("protected Label attempts require coordinator-owned batches")
     import_date = ctx['import_date']
     ctx['context']['run'] += 1
     run_id = task.get('run_id') or ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
@@ -97,6 +102,9 @@ async def label_startup(ctx):
     import_date = ctx['import_date']
     db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
     await db.status(f"CREATE SCHEMA IF NOT EXISTS {db_schema};")
+    if await is_label_publication_protected(db, db_schema):
+        ctx['context']['label_protected_mode'] = True
+        return
     await db.status(f"DROP TABLE IF EXISTS {db_schema}.label_{import_date};")
     mylabel = make_class(Label, import_date)
     await db.create_table(mylabel.__table__)
@@ -123,6 +131,8 @@ async def label_shutdown(ctx):
 
 async def _label_shutdown_impl(ctx):
     """Validate the label import count, swap tables, and report final status."""
+    if ctx.get('context', {}).get('label_protected_mode'):
+        return
     import_date = ctx['import_date']
     control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
     if not ctx['context'].get('label_count'):
@@ -185,6 +195,11 @@ async def _mark_label_success(
 async def init_label_file(ctx, task=None):
     """Load the FDA label manifest and enqueue one task per selected partition."""
     task = task if isinstance(task, dict) else {}
+    completed_stage = await protected_label_import(ctx, task, db, _label_row_dict_from_record, LABEL_DOWNLOAD_SPEC)
+    if completed_stage:
+        return completed_stage
+    if ctx.get('context', {}).get('label_protected_mode'):
+        raise RuntimeError("Label publication ownership changed; restart the worker before an ordinary import")
     if task.get('run_id'):
         ctx['control_run_id'] = task.get('run_id')
         ctx.setdefault('context', {})['control_run_id'] = task.get('run_id')
@@ -235,6 +250,17 @@ async def init_label_file(ctx, task=None):
 
 async def main():
     """Enqueue the default label import manifest task."""
+    await init_db(db, asyncio.get_running_loop())
+    try:
+        if await is_label_publication_protected(db, os.getenv('DB_SCHEMA') or 'rx_data'):
+            from api.control_imports import create_import_run
+
+            run, created = await create_import_run({"importer": "label", "triggered_by": "cli"})
+            if not created or run["status"] == "failed":
+                raise RuntimeError("Label import could not be queued")
+            return
+    finally:
+        await db.disconnect()
     redis = await create_pool(redis_settings(),
                               default_queue_name=LABEL_QUEUE_NAME,
                               job_serializer=msgpack.packb,
