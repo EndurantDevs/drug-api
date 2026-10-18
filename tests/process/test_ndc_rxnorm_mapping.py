@@ -5,7 +5,7 @@ from itertools import permutations
 import pytest
 
 from process import ndc_product
-from process.ndc_stage import _unique_ndc_rows, new_ndc_attempt
+from process.ndc_stage import new_ndc_attempt
 
 
 @pytest.fixture(autouse=True)
@@ -113,8 +113,9 @@ async def test_process_results_sets_is_otc_false_from_product_type(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("dates", [*permutations(("20230201", "20250715", "20240101")),
-                                  (None, "20230201"), ("20230201", None)])
+@pytest.mark.parametrize(
+    "dates", [*permutations(("20230201", "20250715", "20240101")), (None, "20230201"), ("20230201", None)]
+)
 async def test_repeated_package_dates_are_unknown_without_losing_source_occurrences(monkeypatch, caplog, dates):
     result = _build_ndc_result({})
     package = result["packaging"][0]
@@ -123,12 +124,14 @@ async def test_repeated_package_dates_are_unknown_without_losing_source_occurren
 
     async def save(_database, _attempt, products, packages):
         assert len(products) == 1
-        assert len(_unique_ndc_rows(packages, "package_ndc")) == 1
+        assert len({package_row["package_ndc"] for package_row in packages}) == 1
+        assert all(package_row == packages[0] for package_row in packages)
         captured_rows.extend(packages)
 
     monkeypatch.setattr(ndc_product, "save_ndc_batch", save)
-    await ndc_product.process_results({"ndc_attempt": new_ndc_attempt("synthetic-run", "rx_data")},
-                                      {"results": [result]})
+    await ndc_product.process_results(
+        {"ndc_attempt": new_ndc_attempt("synthetic-run", "rx_data")}, {"results": [result]}
+    )
     assert len(captured_rows) == len(dates)
     assert all(row["marketing_start_date"] is None for row in captured_rows)
     assert [row["marketing_start_date"] for row in result["packaging"]] == list(dates)
@@ -139,13 +142,24 @@ async def test_repeated_package_dates_are_unknown_without_losing_source_occurren
 def test_equal_or_distinct_package_dates_keep_their_values(caplog, distinct_packages):
     result = _build_ndc_result({})
     package = result["packaging"][0]
-    result["packaging"] = [{**package, "marketing_start_date": "20230201"},
-                           {**package, "package_ndc": "12345-678-91" if distinct_packages else package["package_ndc"],
-                            "marketing_start_date": "20250715" if distinct_packages else "20230201"}]
-    product = ndc_product._product_row_dict_from_record(result, [c.name for c in ndc_product.Product.__table__.columns])
-    rows = ndc_product._package_rows_from_record(result, product, [c.name for c in ndc_product.Package.__table__.columns])
-    assert [row["marketing_start_date"] for row in rows] == [datetime.date(2023, 2, 1),
-        datetime.date(2025, 7, 15) if distinct_packages else datetime.date(2023, 2, 1)]
+    result["packaging"] = [
+        {**package, "marketing_start_date": "20230201"},
+        {
+            **package,
+            "package_ndc": "12345-678-91" if distinct_packages else package["package_ndc"],
+            "marketing_start_date": "20250715" if distinct_packages else "20230201",
+        },
+    ]
+    product = ndc_product._product_row_dict_from_record(
+        result, [column.name for column in ndc_product.Product.__table__.columns]
+    )
+    rows = ndc_product._package_rows_from_record(
+        result, product, [column.name for column in ndc_product.Package.__table__.columns]
+    )
+    assert [row["marketing_start_date"] for row in rows] == [
+        datetime.date(2023, 2, 1),
+        datetime.date(2025, 7, 15) if distinct_packages else datetime.date(2023, 2, 1),
+    ]
     assert not caplog.records
 
 
@@ -167,10 +181,15 @@ async def test_package_date_normalization_does_not_hide_other_conflicts(monkeypa
         first["packaging"].extend(second["packaging"])
         results = [first]
 
+    captured_packages = []
+
     async def save(_database, _attempt, _products, packages):
-        _unique_ndc_rows(packages, "package_ndc")
+        captured_packages.extend(packages)
 
     monkeypatch.setattr(ndc_product, "save_ndc_batch", save)
-    with pytest.raises(ValueError, match="conflicting NDC records"):
-        await ndc_product.process_results({"ndc_attempt": new_ndc_attempt("synthetic-run", "rx_data")},
-                                          {"results": results})
+    await ndc_product.process_results(
+        {"ndc_attempt": new_ndc_attempt("synthetic-run", "rx_data")}, {"results": results}
+    )
+    assert len(captured_packages) == 2
+    assert captured_packages[0]["package_ndc"] == captured_packages[1]["package_ndc"]
+    assert captured_packages[0] != captured_packages[1]

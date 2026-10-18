@@ -40,20 +40,35 @@ def _install_downloads(monkeypatch, payloads_by_url):
 
 
 def _manifest(partitions):
-    return json.dumps({"results": {"drug": {"ndc": {
-        "export_date": "2026-01-01",
-        "total_records": sum(part["records"] for part in partitions), "partitions": partitions,
-    }}}}).encode()
+    return json.dumps(
+        {
+            "results": {
+                "drug": {
+                    "ndc": {
+                        "export_date": "2026-01-01",
+                        "total_records": sum(part["records"] for part in partitions),
+                        "partitions": partitions,
+                    }
+                }
+            }
+        }
+    ).encode()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_sample,expected_count", [(False, 3), (True, 1)])
-async def test_acquisition_authenticates_actual_archives_and_acknowledges_every_batch(monkeypatch, is_sample, expected_count):
-    partitions = [{"file": "https://synthetic.invalid/one.zip", "records": 2},
-                  {"file": "https://synthetic.invalid/two.zip", "records": 1}]
-    payloads_by_url = {partitions[0]["file"]: _zip_records([{"id": "é\n1"}, {"id": "2"}]),
-                       partitions[1]["file"]: _zip_records([{"id": "3"}]),
-                       "https://synthetic.invalid/manifest": _manifest(partitions)}
+async def test_acquisition_authenticates_actual_archives_and_acknowledges_every_batch(
+    monkeypatch, is_sample, expected_count
+):
+    partitions = [
+        {"file": "https://synthetic.invalid/one.zip", "records": 2},
+        {"file": "https://synthetic.invalid/two.zip", "records": 1},
+    ]
+    payloads_by_url = {
+        partitions[0]["file"]: _zip_records([{"id": "é\n1"}, {"id": "2"}]),
+        partitions[1]["file"]: _zip_records([{"id": "3"}]),
+        "https://synthetic.invalid/manifest": _manifest(partitions),
+    }
     created_paths = _install_downloads(monkeypatch, payloads_by_url)
     monkeypatch.setenv("SAVE_PER_PACK", "1")
     batches = []
@@ -61,20 +76,23 @@ async def test_acquisition_authenticates_actual_archives_and_acknowledges_every_
     async def acknowledge(records):
         batches.append(records)
 
-    manifest = await ndc_acquire.acquire_ndc_manifest("https://synthetic.invalid/manifest",
-                                                    sample=is_sample, max_records=1)
+    manifest = await ndc_acquire.acquire_ndc_manifest(
+        "https://synthetic.invalid/manifest", sample=is_sample, max_records=1
+    )
     acquisition = await ndc_acquire.consume_ndc_partitions(manifest, acknowledge)
     assert acquisition["complete"] is not is_sample
     assert acquisition["export_date"] == "2026-01-01"
     section = json.loads(payloads_by_url["https://synthetic.invalid/manifest"])["results"]["drug"]["ndc"]
     assert acquisition["ndc_section_sha256"] == ndc_acquire._canonical_source_sha256(section)
-    assert acquisition["selected_partitions_sha256"] == ndc_acquire._canonical_source_sha256(partitions[:1] if is_sample else partitions)
+    assert acquisition["selected_partitions_sha256"] == ndc_acquire._canonical_source_sha256(
+        partitions[:1] if is_sample else partitions
+    )
     assert sum(map(len, batches)) == expected_count
     assert sum(part["records"] for part in acquisition["partitions"]) == expected_count
     for receipt in acquisition["partitions"]:
-        payload = payloads_by_url[receipt["url"]]
-        assert receipt["sha256"] == hashlib.sha256(payload).hexdigest()
-        assert receipt["size_bytes"] == len(payload)
+        archive_bytes = payloads_by_url[receipt["url"]]
+        assert receipt["sha256"] == hashlib.sha256(archive_bytes).hexdigest()
+        assert receipt["size_bytes"] == len(archive_bytes)
     assert all(not path.parent.exists() for path in created_paths)
 
 
@@ -174,14 +192,14 @@ async def test_paired_save_counts_only_after_both_tables_commit(monkeypatch, row
         else:
             events.append("commit")
 
-    async def insert_rows(_session, table, rows, _key):
+    async def copy_rows(_session, table, _model, rows):
         if table.name.startswith("package_") and row_error:
             raise RuntimeError("package failed")
         return len(rows)
 
     monkeypatch.setattr(ndc_stage, "lock_ndc_stages", AsyncMock())
     monkeypatch.setattr(ndc_stage, "_check_ndc_run_owner", AsyncMock())
-    monkeypatch.setattr(ndc_stage, "_insert_verified_rows", insert_rows)
+    monkeypatch.setattr(ndc_stage, "_copy_ndc_rows", copy_rows)
     database = SimpleNamespace(transaction=transaction)
     if row_error:
         with pytest.raises(RuntimeError, match="package failed"):
@@ -189,33 +207,58 @@ async def test_paired_save_counts_only_after_both_tables_commit(monkeypatch, row
         assert set(attempt.counts.values()) == {0}
     else:
         await ndc_stage.save_ndc_batch(database, attempt, [{}], [{}])
-        assert set(attempt.counts.values()) == {1}
+        assert attempt.counts == {"product": 0, "package": 0, "source_products": 1, "source_packages": 1, "batches": 1}
     assert events == ["rollback" if row_error else "commit"]
 
 
-@pytest.mark.parametrize("rows,should_fail", [([], False), ([{"id": "1"}] * 2, False),
-                                              ([{"id": ""}], True), ([{"id": None}], True),
-                                              ([{"id": "1"}, {"id": "1", "value": 2}], True)])
-def test_missing_or_conflicting_row_identity_is_never_dropped(rows, should_fail):
-    if should_fail:
-        with pytest.raises(ValueError):
-            ndc_stage._unique_ndc_rows(rows, "id")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identities", [[], ["one", "one"], [""], [None], ["one", "one", " "]])
+async def test_copy_retains_source_occurrences(identities):
+    from sqlalchemy.dialects.postgresql import asyncpg
+
+    attempt = ndc_stage.new_ndc_attempt("synthetic-run", "rx_data")
+    driver = SimpleNamespace(
+        is_in_transaction=lambda: True, copy_records_to_table=AsyncMock(return_value=f"COPY {len(identities)}")
+    )
+    connection = SimpleNamespace(
+        dialect=asyncpg.dialect(),
+        get_raw_connection=AsyncMock(return_value=SimpleNamespace(driver_connection=driver)),
+    )
+    session = SimpleNamespace(in_transaction=lambda: True, connection=AsyncMock(return_value=connection))
+    product_records = [{"product_id": identity, "brand_name": str(index)} for index, identity in enumerate(identities)]
+    assert await ndc_stage._copy_ndc_rows(
+        session, attempt.input_tables["product"], ndc_stage.Product, product_records
+    ) == len(identities)
+    if identities:
+        columns = tuple(ndc_stage.Product.__table__.columns.keys())
+        copied_records = driver.copy_records_to_table.await_args.kwargs["records"]
+        assert [record[columns.index("product_id")] for record in copied_records] == identities
+        assert [record[columns.index("brand_name")] for record in copied_records] == [
+            str(index) for index in range(len(identities))
+        ]
     else:
-        assert len(ndc_stage._unique_ndc_rows(rows, "id")) == bool(rows)
+        session.connection.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("persisted", [[{"product_id": "one"}], [{"product_id": "other"}], []])
-async def test_insert_verification_checks_the_actual_persisted_rows(persisted):
+@pytest.mark.parametrize("completion", ["COPY 1", "COPY 2", None])
+async def test_copy_requires_native_census(completion):
+    from sqlalchemy.dialects.postgresql import asyncpg
+
     attempt = ndc_stage.new_ndc_attempt("synthetic-run", "rx_data")
-    session = SimpleNamespace(execute=AsyncMock(side_effect=[SimpleNamespace(all=lambda: ["one"]),
-                                                          SimpleNamespace(mappings=lambda: persisted)]))
+    driver = SimpleNamespace(is_in_transaction=lambda: True, copy_records_to_table=AsyncMock(return_value=completion))
+    connection = SimpleNamespace(
+        dialect=asyncpg.dialect(),
+        get_raw_connection=AsyncMock(return_value=SimpleNamespace(driver_connection=driver)),
+    )
+    session = SimpleNamespace(in_transaction=lambda: True, connection=AsyncMock(return_value=connection))
     rows = [{"product_id": "one"}]
-    if persisted == rows:
-        assert await ndc_stage._insert_verified_rows(session, attempt.tables["product"], rows, "product_id") == 1
+    if completion == "COPY 1":
+        assert await ndc_stage._copy_ndc_rows(session, attempt.input_tables["product"], ndc_stage.Product, rows) == 1
     else:
-        with pytest.raises(RuntimeError, match="differs"):
-            await ndc_stage._insert_verified_rows(session, attempt.tables["product"], rows, "product_id")
+        with pytest.raises(ValueError, match="COPY count differs"):
+            await ndc_stage._copy_ndc_rows(session, attempt.input_tables["product"], ndc_stage.Product, rows)
+    assert driver.copy_records_to_table.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -230,7 +273,9 @@ async def test_coordinator_never_publishes_before_complete_acquisition(monkeypat
     monkeypatch.setattr(ndc_product, "fail_ndc_attempt", AsyncMock(return_value=1))
     monkeypatch.setattr(ndc_product, "discard_ndc_stages", AsyncMock())
     monkeypatch.setattr(ndc_product, "acquire_ndc_manifest", AsyncMock(return_value={"selected": []}))
-    monkeypatch.setattr(ndc_product, "process_results", AsyncMock(side_effect=RuntimeError("save") if failure == "save" else None))
+    monkeypatch.setattr(
+        ndc_product, "process_results", AsyncMock(side_effect=RuntimeError("save") if failure == "save" else None)
+    )
 
     async def consume(_manifest, consume_batch):
         events.append("acquire")
@@ -248,7 +293,9 @@ async def test_coordinator_never_publishes_before_complete_acquisition(monkeypat
 
     monkeypatch.setattr(ndc_product, "consume_ndc_partitions", consume)
     monkeypatch.setattr(ndc_product, "publish_ndc_tables", publish)
-    monkeypatch.setattr(ndc_product, "enqueue_live_progress", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("event")))
+    monkeypatch.setattr(
+        ndc_product, "enqueue_live_progress", lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("event"))
+    )
     if failure:
         with pytest.raises(asyncio.CancelledError if failure == "cancel" else RuntimeError):
             await ndc_product.init_file({}, {"run_id": "synthetic-run"})
@@ -274,7 +321,9 @@ async def test_generic_run_mark_never_announces_a_failed_row_transition(monkeypa
     events = []
     monkeypatch.setattr(control_lifecycle, "enqueue_live_progress", lambda **_kwargs: events.append("progress"))
     monkeypatch.setattr(control_lifecycle, "enqueue_status_event", lambda _record: events.append("status"))
-    await control_lifecycle.mark_control_run("synthetic-run", status="failed", phase_detail="failure", progress_message="failed")
+    await control_lifecycle.mark_control_run(
+        "synthetic-run", status="failed", phase_detail="failure", progress_message="failed"
+    )
     statement = str(control_lifecycle.db.status.call_args.args[0])
     assert "importer <> 'ndc' OR NOT (COALESCE(metrics, '{}'::jsonb) ? 'ndc_attempt_id')" in statement
     assert events == (["progress", "status"] if changed else [])
@@ -295,7 +344,8 @@ async def test_download_digest_covers_exact_written_chunks_and_enforces_cap(limi
         assert destination.write.call_count == 1
     else:
         assert await utils._write_response_chunks(response, destination, max_bytes=limit) == {
-            "sha256": hashlib.sha256(b"abc").hexdigest(), "size_bytes": 3,
+            "sha256": hashlib.sha256(b"abc").hexdigest(),
+            "size_bytes": 3,
         }
 
 
@@ -329,22 +379,25 @@ def test_control_result_preserves_native_terminal_receipt_binding():
 
 
 @pytest.mark.asyncio
-async def test_insert_verification_bounds_sql_batches_without_omitting_late_rows():
+async def test_native_copy_keeps_tail():
+    from sqlalchemy.dialects.postgresql import asyncpg
+
     attempt = ndc_stage.new_ndc_attempt("synthetic-run", "rx_data")
-    rows = [{"product_id": str(index)} for index in range(1201)]
-    pending_rows = []
+    rows = [{"product_id": str(index)} for index in range(12001)]
     batch_sizes = []
 
-    async def execute(_statement, parameters=None):
-        if parameters is not None:
-            pending_rows[:] = parameters
-            batch_sizes.append(len(parameters))
-            return SimpleNamespace(all=lambda: parameters)
-        return SimpleNamespace(mappings=lambda: list(pending_rows))
+    async def copy(_table, **options):
+        batch_sizes.append(len(options["records"]))
+        return f"COPY {len(options['records'])}"
 
-    session = SimpleNamespace(execute=execute)
-    assert await ndc_stage._insert_verified_rows(session, attempt.tables["product"], rows, "product_id") == 1201
-    assert batch_sizes == [500, 500, 201]
+    driver = SimpleNamespace(is_in_transaction=lambda: True, copy_records_to_table=copy)
+    connection = SimpleNamespace(
+        dialect=asyncpg.dialect(),
+        get_raw_connection=AsyncMock(return_value=SimpleNamespace(driver_connection=driver)),
+    )
+    session = SimpleNamespace(in_transaction=lambda: True, connection=AsyncMock(return_value=connection))
+    assert await ndc_stage._copy_ndc_rows(session, attempt.input_tables["product"], ndc_stage.Product, rows) == 12001
+    assert batch_sizes == [5000, 5000, 2001]
 
 
 @pytest.mark.asyncio
@@ -385,7 +438,11 @@ async def test_native_result_flushes_terminal_event_after_committed_result(monke
     receipt_dict = {"format": "ndc-publication-v1", "run_id": "synthetic-run"} if is_native_success else None
     monkeypatch.setattr(control_lifecycle, "_flush_terminal_status_events", AsyncMock())
     result = await control_lifecycle._finish_native_result(task, receipt_dict)
-    assert result == {"status": "succeeded" if is_native_success else "running", "run_id": task.run_id, "result": receipt_dict}
+    assert result == {
+        "status": "succeeded" if is_native_success else "running",
+        "run_id": task.run_id,
+        "result": receipt_dict,
+    }
     assert control_lifecycle._flush_terminal_status_events.await_count == int(is_native_success)
 
 
@@ -417,9 +474,12 @@ async def test_cleanup_runs_after_status_failure_and_preserves_original_error(mo
 
 
 @pytest.mark.asyncio
-async def test_actual_download_receipts_and_archive_parser_share_http_transport_fixture(monkeypatch):
+@pytest.mark.parametrize("brand_name", [None, "Synthetic A", "Synthetic B"])
+async def test_actual_download_receipts_and_archive_parser_share_http_transport_fixture(monkeypatch, brand_name):
     manifest_url = "https://example.test/ndc/manifest.json"
-    _section, payloads_by_url, temporary_paths = install_coordinator_sources(monkeypatch, manifest_url)
+    _section, payloads_by_url, temporary_paths = install_coordinator_sources(
+        monkeypatch, manifest_url, brand_name=brand_name
+    )
     batches = []
 
     async def acknowledge(records):
@@ -428,6 +488,7 @@ async def test_actual_download_receipts_and_archive_parser_share_http_transport_
     manifest = await ndc_acquire.acquire_ndc_manifest(manifest_url, sample=False, max_records=1)
     acquisition = await ndc_acquire.consume_ndc_partitions(manifest, acknowledge)
     assert acquisition["complete"] and len(batches) == 2
+    assert [record.get("brand_name") for record in batches] == [brand_name, brand_name]
     for receipt_dict in [acquisition["manifest"], *acquisition["partitions"]]:
         source_bytes = payloads_by_url[receipt_dict["url"]]
         assert receipt_dict["sha256"] == hashlib.sha256(source_bytes).hexdigest()

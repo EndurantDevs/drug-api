@@ -19,6 +19,7 @@ class Product(db.Model, JSONOutputMixin):
 
     __tablename__ = "product"
     __table__ = _ArchiveProduct.__table__.to_metadata(db.Model.metadata)
+    __my_additional_indexes__ = _ArchiveProduct.__my_additional_indexes__
     if TYPE_CHECKING:
         product_id = _ArchiveProduct.product_id
         product_ndc = _ArchiveProduct.product_ndc
@@ -50,6 +51,7 @@ class Package(db.Model, JSONOutputMixin):
 
     __tablename__ = "package"
     __table__ = _ArchivePackage.__table__.to_metadata(db.Model.metadata)
+    __my_additional_indexes__ = _ArchivePackage.__my_additional_indexes__
     if TYPE_CHECKING:
         package_ndc = _ArchivePackage.package_ndc
         ndc11 = _ArchivePackage.ndc11
