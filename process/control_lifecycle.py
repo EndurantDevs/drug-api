@@ -114,7 +114,9 @@ def _control_task_from_payload(ctx: dict[str, Any], task: dict[str, Any] | None)
         ctx["control_run_id"] = run_id
     return ControlTask(
         run_id=run_id,
-        importer=str(request_payload_dict.get("importer") or request_payload_dict.get("target_function") or "unknown").strip(),
+        importer=str(
+            request_payload_dict.get("importer") or request_payload_dict.get("target_function") or "unknown"
+        ).strip(),
         target_module=str(request_payload_dict.get("target_module") or "").strip(),
         target_function=str(request_payload_dict.get("target_function") or "").strip(),
         call_style=str(request_payload_dict.get("call_style") or "ctx_task").strip(),
@@ -128,9 +130,7 @@ async def _call_target_function(ctx: dict[str, Any], control_task: ControlTask) 
     accepted_params = signature(target_function).parameters
     if control_task.call_style == "kwargs":
         target_kwargs_dict = {
-            key: target_value
-            for key, target_value in control_task.target_task_dict.items()
-            if key in accepted_params
+            key: target_value for key, target_value in control_task.target_task_dict.items() if key in accepted_params
         }
         return await target_function(**target_kwargs_dict)
     if len(accepted_params) >= 2:
@@ -194,7 +194,9 @@ def _terminal_progress_from_result(target_function: str, result: Any) -> dict[st
             "total": scanned,
             "pct": 100,
             "message": "succeeded",
-            "phase": "drug indications import published" if result.get("published") else "drug indications import staged",
+            "phase": "drug indications import published"
+            if result.get("published")
+            else "drug indications import staged",
         }
     return None
 
@@ -260,9 +262,7 @@ async def mark_control_run(
     )
     if changed != 1:
         return
-    enqueue_live_progress(
-        **_live_progress_payload(progress_payload_dict, transition)
-    )
+    enqueue_live_progress(**_live_progress_payload(progress_payload_dict, transition))
     enqueue_status_event(_status_event_payload(progress_payload_dict, transition))
 
 
@@ -299,7 +299,13 @@ def _cancel_guard_for_status(status: str) -> str:
 
 def _default_progress_payload(status: str, progress_message: str) -> dict[str, Any]:
     is_terminal = status in {"succeeded", "failed", "canceled", "dead_letter"}
-    return {"unit": "run", "total": 1, "done": 1 if is_terminal else 0, "pct": 100 if is_terminal else 0, "message": progress_message}
+    return {
+        "unit": "run",
+        "total": 1,
+        "done": 1 if is_terminal else 0,
+        "pct": 100 if is_terminal else 0,
+        "message": progress_message,
+    }
 
 
 def _live_progress_payload(
@@ -376,9 +382,22 @@ async def ensure_import_run_table() -> None:
 
 
 def _native_result_status(control_task: ControlTask, result: Any) -> str:
-    """Reflect the NDC coordinator's already-committed native terminal result."""
-    if (control_task.target_module == "process.ndc_product" and isinstance(result, dict)
-            and result.get("format") == "ndc-publication-v1" and result.get("run_id") == control_task.run_id):
+    """Reflect the NDC coordinator's committed handoff or terminal result."""
+    if (
+        control_task.target_module == "process.ndc_product"
+        and isinstance(result, dict)
+        and result.get("format") == "ndc-stage-handoff-v1"
+        and result.get("run_id") == control_task.run_id
+        and result.get("complete") is True
+        and result.get("published") is False
+    ):
+        return "finalizing"
+    if (
+        control_task.target_module == "process.ndc_product"
+        and isinstance(result, dict)
+        and result.get("format") == "ndc-publication-v1"
+        and result.get("run_id") == control_task.run_id
+    ):
         return "succeeded"
     return "running"
 
