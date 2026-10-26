@@ -17,7 +17,7 @@ httpx==0.28.1
 humanize==4.16.0
 idna==3.18
 ijson==3.5.1
-Mako==1.4.1
+Mako==1.4.2
 MarkupSafe==3.0.3
 msgpack==1.2.1
 multidict==6.7.1
