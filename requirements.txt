@@ -20,7 +20,7 @@ ijson==3.5.1
 Mako==1.4.1
 MarkupSafe==3.0.3
 msgpack==1.2.1
-multidict==6.7.1
+multidict==6.9.1
 packaging==26.3
 pyaml==26.7.0
 pydantic==2.13.4
