@@ -1,4 +1,6 @@
+import asyncio
 import json
+import threading
 
 import pytest
 
@@ -106,6 +108,120 @@ def test_live_progress_preserves_earliest_started_at(monkeypatch):
 
     progress_payload_dict = json.loads(writes[0][2])
     assert progress_payload_dict["started_at"] == previous_progress_dict["started_at"]
+
+
+@pytest.mark.asyncio
+async def test_enqueued_progress_publishes_on_event_loop_and_writes_redis_in_thread(monkeypatch):
+    loop = asyncio.get_running_loop()
+    main_thread = threading.get_ident()
+    published = asyncio.Event()
+    written = threading.Event()
+    events = []
+
+    class FakeQueue:
+        def full(self):
+            return False
+
+        def put_nowait(self, event):
+            assert asyncio.get_running_loop() is loop
+            events.append(event)
+            published.set()
+
+    class FakeRedis:
+        def setex(self, key, ttl, value):
+            assert threading.get_ident() != main_thread
+            assert key == "import:progress:run_threaded"
+            assert json.loads(value)["done"] == 12
+            written.set()
+
+    monkeypatch.setenv("HLTHPRT_IMPORT_CONTROL_URL", "https://callback.example.test")
+    monkeypatch.setattr(import_status_events, "_ensure_queue", lambda event_loop: FakeQueue())
+    monkeypatch.setattr(live_progress, "_redis", FakeRedis)
+    monkeypatch.setattr(import_status_events._publisher_state, "last_sent_by_run", {})
+
+    live_progress.enqueue_live_progress(
+        run_id="run_threaded",
+        importer="drug-indications",
+        status="running",
+        phase="scanning labels",
+        unit="labels",
+        done=12,
+        total=20,
+    )
+
+    await asyncio.wait_for(published.wait(), timeout=1)
+    assert await asyncio.to_thread(written.wait, 1)
+    assert events[0]["progress"]["done"] == 12
+    assert events[0]["progress"]["pct"] == 60
+
+
+def test_closed_event_loop_keeps_best_effort_redis_write(monkeypatch):
+    loop = asyncio.new_event_loop()
+    loop.close()
+    writes = []
+
+    class FakeRedis:
+        def setex(self, key, ttl, value):
+            writes.append(json.loads(value))
+
+    monkeypatch.setattr(live_progress, "_redis", FakeRedis)
+    live_progress.write_live_progress(_event_loop=loop, run_id="run_closed_loop", done=1)
+
+    assert writes[0]["done"] == 1
+
+
+@pytest.mark.parametrize("status", ["running", "succeeded"])
+@pytest.mark.parametrize("has_total", [True, False])
+def test_heartbeat_preserves_measured_progress_and_terminal_state(monkeypatch, status, has_total):
+    previous_progress_dict = {
+        "run_id": "run_heartbeat",
+        "importer": "drug-indications",
+        "status": status,
+        "phase": "scanning labels",
+        "unit": "labels",
+        "done": 12,
+        "total": 20,
+        "pct": 60,
+        "message": "scanned 12 labels",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    if not has_total:
+        previous_progress_dict.pop("total")
+        previous_progress_dict.pop("pct")
+    writes = []
+    events = []
+
+    class FakeRedis:
+        def get(self, key):
+            return json.dumps(previous_progress_dict)
+
+        def setex(self, key, ttl, value):
+            writes.append(json.loads(value))
+
+    monkeypatch.setattr(live_progress, "_redis", FakeRedis)
+    monkeypatch.setattr(live_progress, "enqueue_status_event", events.append)
+    live_progress.write_live_progress(
+        run_id="run_heartbeat",
+        importer="drug-indications",
+        status="running",
+        phase="import_drug_indications running",
+        unit="run",
+        done=0,
+        total=1,
+        pct=0,
+        message="running",
+        source="import-control-heartbeat",
+        confidence="heartbeat",
+        started_at="2026-01-01T00:00:00Z",
+    )
+
+    if status == "succeeded":
+        assert writes == events == []
+    else:
+        for key in ("phase", "unit", "done", "total", "pct", "message"):
+            assert writes[0][key] == previous_progress_dict.get(key)
+            assert events[0]["progress"].get(key) == previous_progress_dict.get(key)
+        assert writes[0]["updated_at"] != previous_progress_dict["updated_at"]
 
 
 def test_control_imports_overlay_live_progress_for_active_run(monkeypatch):
