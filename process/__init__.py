@@ -4,6 +4,7 @@ import os
 import click
 import msgpack
 import uvloop
+from arq import func
 
 from db.connection import init_db
 from db.models import db
@@ -50,7 +51,8 @@ class NDC:
 
 
 class Labeling:
-    functions = [download_label_content, process_label_results, init_label_file, control_single_job_start]
+    functions = [download_label_content, process_label_results,
+                 func(init_label_file, timeout=86400), func(control_single_job_start, timeout=86400)]
     on_startup = label_startup
     on_shutdown = label_shutdown
     queue_name = LABEL_QUEUE_NAME

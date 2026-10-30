@@ -2,6 +2,7 @@ import datetime
 import importlib
 import os
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -267,6 +268,7 @@ async def test_label_startup_creates_suffixed_label_table(monkeypatch):
 
     monkeypatch.setattr(label, "db", fake_db)
     monkeypatch.setattr(label, "init_db", fake_init_db)
+    monkeypatch.setattr(label, "is_label_publication_protected", AsyncMock(return_value=False))
 
     context_dict = {}
     await label.label_startup(context_dict)
@@ -274,6 +276,9 @@ async def test_label_startup_creates_suffixed_label_table(monkeypatch):
     import_date = context_dict["import_date"]
     assert [table.name for table in fake_db.created_tables] == [f"label_{import_date}"]
     assert f"DROP TABLE IF EXISTS rx_data.label_{import_date};" in fake_db.statements
+    next_context_dict = {}
+    await label.label_startup(next_context_dict)
+    assert next_context_dict["import_date"] == import_date
 
 
 @pytest.mark.asyncio
