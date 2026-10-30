@@ -8,13 +8,14 @@ import datetime as dt
 import json
 import math
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
 import redis
 
-from process.import_status_events import enqueue_status_event
+from process.import_status_events import TERMINAL_STATUSES, enqueue_status_event
 
 IMPORT_LIVE_PROGRESS_TTL_SECONDS = int(
     os.getenv(
@@ -48,9 +49,7 @@ def live_progress_key(run_id: str) -> str:
 def set_live_progress_context(**progress_fields: Any) -> contextvars.Token:
     """Set default live-progress fields for the current async context."""
     context_fields_dict = {
-        field_key: field_value
-        for field_key, field_value in progress_fields.items()
-        if field_value not in (None, "")
+        field_key: field_value for field_key, field_value in progress_fields.items() if field_value not in (None, "")
     }
     return _context.set(context_fields_dict)
 
@@ -65,7 +64,7 @@ def current_live_progress_context() -> dict[str, Any]:
     return dict(_context.get() or {})
 
 
-def write_live_progress(**progress_fields: Any) -> None:
+def write_live_progress(*, _event_loop: asyncio.AbstractEventLoop | None = None, **progress_fields: Any) -> None:
     """Write one live-progress payload to Redis and optionally publish an event."""
     context = current_live_progress_context()
     run_id = str(progress_fields.get("run_id") or context.get("run_id") or "").strip()
@@ -75,37 +74,33 @@ def write_live_progress(**progress_fields: Any) -> None:
     now = _utc_now()
     progress_record_dict = _progress_record_from_fields(run_id, context, progress_fields, now)
     publish_event = bool(progress_record_dict.pop("publish_event", True))
-    if _should_merge_previous(progress_record_dict):
-        previous = _read_live_progress_payload(run_id)
-        if previous:
-            for key in ("importer", "source", "confidence"):
-                if not progress_record_dict.get(key) or progress_record_dict.get(key) == "unknown":
-                    progress_record_dict[key] = previous.get(key) or progress_record_dict.get(key)
-            previous_started_at = _parse_datetime(previous.get("started_at"))
-            current_started_at = _parse_datetime(progress_record_dict.get("started_at"))
-            if previous_started_at is not None and (
-                current_started_at is None or previous_started_at <= current_started_at
-            ):
-                progress_record_dict["started_at"] = previous.get("started_at")
+    previous = _read_live_progress_payload(run_id) if _should_merge_previous(progress_record_dict) else None
+    is_heartbeat = progress_fields.get("source") == "import-control-heartbeat"
+    if previous and is_heartbeat and previous.get("status") in TERMINAL_STATUSES:
+        return
+    if previous:
+        if is_heartbeat:
+            progress_record_dict.update(
+                {key: previous.get(key) for key in ("phase", "unit", "done", "total", "pct", "message")}
+            )
+        for key in ("importer", "source", "confidence"):
+            if not progress_record_dict.get(key) or progress_record_dict.get(key) == "unknown":
+                progress_record_dict[key] = previous.get(key) or progress_record_dict.get(key)
+        previous_started_at = _parse_datetime(previous.get("started_at"))
+        current_started_at = _parse_datetime(progress_record_dict.get("started_at"))
+        if previous_started_at is not None and (
+            current_started_at is None or previous_started_at <= current_started_at
+        ):
+            progress_record_dict["started_at"] = previous.get("started_at")
     status = str(progress_record_dict.get("status") or "").lower()
-    is_terminal = status in {"succeeded", "failed", "canceled", "cancelled", "dead_letter"}
+    is_terminal = status in TERMINAL_STATUSES
     _normalize_progress_fields(progress_record_dict, terminal=is_terminal)
     _normalize_estimate_fields(progress_record_dict, now=now, terminal=is_terminal)
     if "label" in progress_record_dict:
         progress_record_dict["label"] = _safe_label(str(progress_record_dict["label"]))
 
     if publish_event:
-        enqueue_status_event(
-            {
-                "run_id": run_id,
-                "importer": progress_record_dict.get("importer"),
-                "status": progress_record_dict.get("status") or "running",
-                "phase_detail": str(progress_record_dict.get("phase") or "")[:128] or None,
-                "progress": progress_payload_from_live(progress_record_dict),
-                "estimate": estimate_payload_from_live(progress_record_dict),
-                "heartbeat_at": progress_record_dict.get("updated_at"),
-            }
-        )
+        _enqueue_progress_event(progress_record_dict, _event_loop)
 
     try:
         _redis().setex(
@@ -115,6 +110,24 @@ def write_live_progress(**progress_fields: Any) -> None:
         )
     except Exception:
         return
+
+
+def _enqueue_progress_event(progress_record_dict: dict[str, Any], event_loop: asyncio.AbstractEventLoop | None) -> None:
+    """Queue status callbacks on the owner loop while Redis writes run in a thread."""
+    event_dict = {
+        "run_id": progress_record_dict["run_id"],
+        "importer": progress_record_dict.get("importer"),
+        "status": progress_record_dict.get("status") or "running",
+        "phase_detail": str(progress_record_dict.get("phase") or "")[:128] or None,
+        "progress": progress_payload_from_live(progress_record_dict),
+        "estimate": estimate_payload_from_live(progress_record_dict),
+        "heartbeat_at": progress_record_dict.get("updated_at"),
+    }
+    if event_loop is None:
+        enqueue_status_event(event_dict)
+    else:
+        with suppress(RuntimeError):
+            event_loop.call_soon_threadsafe(enqueue_status_event, event_dict)
 
 
 def _progress_record_from_fields(
@@ -131,11 +144,7 @@ def _progress_record_from_fields(
         "confidence": progress_fields.get("confidence") or context.get("confidence") or "live",
         "updated_at": now.isoformat() + "Z",
         **{context_key: context_value for context_key, context_value in context.items() if context_key != "run_id"},
-        **{
-            field_key: field_value
-            for field_key, field_value in progress_fields.items()
-            if field_value is not None
-        },
+        **{field_key: field_value for field_key, field_value in progress_fields.items() if field_value is not None},
     }
 
 
@@ -147,7 +156,7 @@ def enqueue_live_progress(**progress_fields: Any) -> None:
         write_live_progress(**progress_fields)
         return
     try:
-        loop.create_task(asyncio.to_thread(write_live_progress, **progress_fields))
+        loop.create_task(asyncio.to_thread(write_live_progress, _event_loop=loop, **progress_fields))
     except Exception:
         return
 
@@ -177,7 +186,7 @@ def _read_live_progress_payload(run_id: str) -> dict[str, Any] | None:
         return None
     try:
         payload = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else str(raw))
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except TypeError, ValueError, json.JSONDecodeError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -195,7 +204,9 @@ def progress_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
         "phase": live.get("phase"),
         "updated_at": live.get("updated_at"),
     }
-    return {field_key: field_value for field_key, field_value in progress_payload_dict.items() if field_value is not None}
+    return {
+        field_key: field_value for field_key, field_value in progress_payload_dict.items() if field_value is not None
+    }
 
 
 def estimate_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
@@ -207,7 +218,9 @@ def estimate_payload_from_live(live: dict[str, Any]) -> dict[str, Any]:
         "source": live.get("source") or "import-live-progress",
         "updated_at": live.get("updated_at"),
     }
-    return {field_key: field_value for field_key, field_value in estimate_payload_dict.items() if field_value is not None}
+    return {
+        field_key: field_value for field_key, field_value in estimate_payload_dict.items() if field_value is not None
+    }
 
 
 def _redis() -> redis.Redis:
@@ -265,7 +278,7 @@ def _safe_label(value: str) -> str:
 def _coerce_float(value: Any) -> float | None:
     try:
         result = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return result if math.isfinite(result) else None
 
