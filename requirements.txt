@@ -19,7 +19,7 @@ idna==3.18
 ijson==3.5.1
 Mako==1.4.1
 MarkupSafe==3.0.3
-msgpack==1.2.1
+msgpack==1.2.3
 multidict==6.7.1
 packaging==26.3
 pyaml==26.7.0
