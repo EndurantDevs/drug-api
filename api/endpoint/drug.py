@@ -4,8 +4,14 @@ from datetime import datetime
 import sanic.exceptions
 from sanic import Blueprint, response
 
-from api.utils import (get_brand_packages, get_brand_products, get_generic_packages, get_generic_products,
-                       get_packages_by_rxnorm, get_products_by_rxnorm)
+from api.utils import (
+    get_brand_packages,
+    get_brand_products,
+    get_generic_packages,
+    get_generic_products,
+    get_packages_by_rxnorm,
+    get_products_by_rxnorm,
+)
 from db.models import DrugConditionEvidence, Label, Package, Product, db
 
 blueprint = Blueprint('drug', url_prefix='/drug', version=1)
@@ -108,15 +114,8 @@ async def label_product_ndc_obj(request, product_ndc):
 @blueprint.get('/list-product/all', name='list_product_all')
 @blueprint.get('/list-product/all/<page:int>/', name='list_product_all_with_page')
 @blueprint.get('/list-product/all/<page:int>/<results_per_page:int>', name='list_product_all_with_page_and_results_per_page')
-async def list_product_all(request, letter='a', page=0, results_per_page = 49999, prefix='', separator='', suffix=''):
+async def list_product_all(request, letter='a', page=0, results_per_page = 49999):
     """Return a paginated list of product NDC display names."""
-    for (query_key, query_value) in request.query_args:
-        if query_key == 'prefix' and query_value:
-            prefix = query_value
-        elif query_key == 'separator' and query_value:
-            separator = query_value
-        elif query_key == 'suffix' and query_value:
-            suffix = query_value
     if not letter or len(letter) > 1:
         raise sanic.exceptions.NotFound
     if not page or page<0:

@@ -15,7 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from api.control_imports import LABEL_QUEUE_NAME, NDC_QUEUE_NAME
-from api.control_worker_manifest import worker_job_manifest, worker_job_name, worker_python
+from api.control_worker_manifest import (
+    worker_job_manifest,
+    worker_job_name,
+    worker_python,
+)
 
 
 @dataclass(frozen=True)

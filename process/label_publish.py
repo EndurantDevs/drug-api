@@ -2,10 +2,13 @@
 
 from typing import Any
 
+from process.result_publication_authority import publish_local_result_generation, require_label_ordinary_publication
+
 
 async def publish_label_table(database: Any, db_schema: str, import_date: str) -> None:
     """Create indexes and swap the staged label table into service."""
     async with database.transaction():
+        await require_label_ordinary_publication(database, db_schema)
         print('Creating indexes..')
         await database.status(
             f"CREATE INDEX idx_product_ndc_{import_date} ON "
@@ -20,6 +23,7 @@ async def publish_label_table(database: Any, db_schema: str, import_date: str) -
             f"CREATE INDEX idx_label_set_id_{import_date} ON "
             f"{db_schema}.label_{import_date} (set_id);")
 
+        await database.status("SET LOCAL lock_timeout = '5s'")
         await database.status(f"DROP TABLE IF EXISTS {db_schema}.label_old;")
 
         await database.status(f"ALTER INDEX IF EXISTS "
@@ -42,3 +46,9 @@ async def publish_label_table(database: Any, db_schema: str, import_date: str) -
                               f"{db_schema}.idx_label_set_id_{import_date} RENAME TO idx_label_set_id;")
         await database.status(f"ALTER TABLE IF EXISTS "
                               f"{db_schema}.label_{import_date} RENAME TO label;")
+        await publish_local_result_generation(
+            database,
+            importer_id="label",
+            schema=db_schema,
+            consumed_dependencies={},
+        )

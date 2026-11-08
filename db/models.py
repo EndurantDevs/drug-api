@@ -1,6 +1,13 @@
 import os
+from typing import TYPE_CHECKING
 
-from sqlalchemy import DATE, JSON, TEXT, BigInteger, Boolean, Column, DateTime, Float, String
+from sqlalchemy import (
+    TEXT,
+    Column,
+    DateTime,
+    Float,
+    String,
+)
 from sqlalchemy.dialects.postgresql import ARRAY
 
 from db.connection import db
@@ -8,193 +15,69 @@ from db.json_mixin import JSONOutputMixin
 
 
 class Product(db.Model, JSONOutputMixin):
-    __tablename__ = 'product'
-    __table_args__ = (
-        {'schema': os.getenv('DB_SCHEMA') or 'rx_data', 'extend_existing': True},
-    )
-    product_ndc = Column(String)
-    generic_name = Column(String)
-    labeler_name = Column(String)
-    brand_name = Column(String)
-    active_ingredients = Column(ARRAY(JSON))
-    finished = Column(Boolean)
-    listing_expiration_date = Column(DATE)
-    openfda = Column(JSON)
-    marketing_category = Column(String)
-    is_otc = Column(Boolean)
-    dosage_form = Column(String)
-    short_dosage_form = Column(String)
-    spl_id = Column(String)
-    product_type = Column(String)
-    route = Column(ARRAY(String))
-    marketing_start_date = Column(DATE)
-    marketing_end_date = Column(DATE)
-    product_id = Column(String, primary_key=True)
-    application_number = Column(String)
-    brand_name_base = Column(String)
-    pharm_class = Column(ARRAY(String))
-    dea_schedule = Column(String)
-    rxnorm_ids = Column(ARRAY(String))
+    from db.drug_snapshot_runtime.ndc import Product as _ArchiveProduct
+
+    __tablename__ = "product"
+    __table__ = _ArchiveProduct.__table__.to_metadata(db.Model.metadata)
+    __my_additional_indexes__ = _ArchiveProduct.__my_additional_indexes__
+    if TYPE_CHECKING:
+        product_id = _ArchiveProduct.product_id
+        product_ndc = _ArchiveProduct.product_ndc
+        generic_name = _ArchiveProduct.generic_name
+        labeler_name = _ArchiveProduct.labeler_name
+        brand_name = _ArchiveProduct.brand_name
+        active_ingredients = _ArchiveProduct.active_ingredients
+        finished = _ArchiveProduct.finished
+        listing_expiration_date = _ArchiveProduct.listing_expiration_date
+        openfda = _ArchiveProduct.openfda
+        marketing_category = _ArchiveProduct.marketing_category
+        is_otc = _ArchiveProduct.is_otc
+        dosage_form = _ArchiveProduct.dosage_form
+        short_dosage_form = _ArchiveProduct.short_dosage_form
+        spl_id = _ArchiveProduct.spl_id
+        product_type = _ArchiveProduct.product_type
+        route = _ArchiveProduct.route
+        marketing_start_date = _ArchiveProduct.marketing_start_date
+        marketing_end_date = _ArchiveProduct.marketing_end_date
+        application_number = _ArchiveProduct.application_number
+        brand_name_base = _ArchiveProduct.brand_name_base
+        pharm_class = _ArchiveProduct.pharm_class
+        dea_schedule = _ArchiveProduct.dea_schedule
+        rxnorm_ids = _ArchiveProduct.rxnorm_ids
 
 
 class Package(db.Model, JSONOutputMixin):
-    __tablename__ = 'package'
-    __table_args__ = (
-        {'schema': os.getenv('DB_SCHEMA') or 'rx_data', 'extend_existing': True},
-    )
-    package_ndc = Column(String, primary_key=True)
-    ndc11 = Column(String)
-    product_ndc = Column(String)
-    description = Column(TEXT)
-    size = Column(BigInteger)
-    size_extra = Column(String)
-    packages_number = Column(BigInteger)
-    package_format = Column(String)
-    marketing_start_date = Column(DATE)
-    sample = Column(Boolean)
+    from db.drug_snapshot_runtime.ndc import Package as _ArchivePackage
+
+    __tablename__ = "package"
+    __table__ = _ArchivePackage.__table__.to_metadata(db.Model.metadata)
+    __my_additional_indexes__ = _ArchivePackage.__my_additional_indexes__
+    if TYPE_CHECKING:
+        package_ndc = _ArchivePackage.package_ndc
+        ndc11 = _ArchivePackage.ndc11
+        product_ndc = _ArchivePackage.product_ndc
+        description = _ArchivePackage.description
+        size = _ArchivePackage.size
+        size_extra = _ArchivePackage.size_extra
+        packages_number = _ArchivePackage.packages_number
+        package_format = _ArchivePackage.package_format
+        marketing_start_date = _ArchivePackage.marketing_start_date
+        sample = _ArchivePackage.sample
 
 
 class Label(db.Model, JSONOutputMixin):
-    __tablename__ = 'label'
-    __table_args__ = (
-        {'schema': os.getenv('DB_SCHEMA') or 'rx_data', 'extend_existing': True},
-    )
-    abuse = Column(String)
-    abuse_table = Column(String)
-    controlled_substance = Column(String)
-    controlled_substance_table = Column(String)
-    dependence = Column(String)
-    dependence_table = Column(String)
-    drug_abuse_and_dependence = Column(String)
-    drug_abuse_and_dependence_table = Column(String)
-    overdosage = Column(String)
-    overdosage_table = Column(String)
-    adverse_reactions = Column(String)
-    adverse_reactions_table = Column(String)
-    drug_and_or_laboratory_test_interactions = Column(String)
-    drug_and_or_laboratory_test_interactions_table = Column(String)
-    drug_interactions = Column(String)
-    drug_interactions_table = Column(String)
-    clinical_pharmacology = Column(String)
-    clinical_pharmacology_table = Column(String)
-    mechanism_of_action = Column(String)
-    mechanism_of_action_table = Column(String)
-    pharmacodynamics = Column(String)
-    pharmacodynamics_table = Column(String)
-    pharmacokinetics = Column(String)
-    pharmacokinetics_table = Column(String)
-    effective_time = Column(String)
-    id = Column(String, primary_key=True)
-    set_id = Column(String)
-    version = Column(String)
-    active_ingredient = Column(String)
-    active_ingredient_table = Column(String)
-    contraindications = Column(String)
-    contraindications_table = Column(String)
-    description = Column(String)
-    description_table = Column(String)
-    dosage_and_administration = Column(String)
-    dosage_and_administration_table = Column(String)
-    dosage_forms_and_strengths = Column(String)
-    dosage_forms_and_strengths_table = Column(String)
-    inactive_ingredient = Column(String)
-    inactive_ingredient_table = Column(String)
-    indications_and_usage = Column(String)
-    indications_and_usage_table = Column(String)
-    purpose = Column(String)
-    purpose_table = Column(String)
-    spl_product_data_elements = Column(String)
-    spl_product_data_elements_table = Column(String)
-    animal_pharmacology_and_or_toxicology = Column(String)
-    animal_pharmacology_and_or_toxicology_table = Column(String)
-    carcinogenesis_and_mutagenesis_and_impairment_of_fertility = Column(String)
-    carcinogenesis_and_mutagenesis_and_impairment_of_fertility_table = Column(String)
-    nonclinical_toxicology = Column(String)
-    nonclinical_toxicology_table = Column(String)
-    openfda = Column(JSON)
-    product_ndc = Column(ARRAY(String))
-    package_ndc = Column(ARRAY(String))
-    laboratory_tests = Column(String)
-    laboratory_tests_table = Column(String)
-    microbiology = Column(String)
-    microbiology_table = Column(String)
-    package_label_principal_display_panel = Column(String)
-    package_label_principal_display_panel_table = Column(String)
-    recent_major_changes = Column(String)
-    recent_major_changes_table = Column(String)
-    spl_unclassified_section = Column(String)
-    spl_unclassified_section_table = Column(String)
-    ask_doctor = Column(String)
-    ask_doctor_or_pharmacist = Column(String)
-    ask_doctor_or_pharmacist_table = Column(String)
-    ask_doctor_table = Column(String)
-    do_not_use = Column(String)
-    do_not_use_table = Column(String)
-    information_for_owners_or_caregivers = Column(String)
-    information_for_owners_or_caregivers_table = Column(String)
-    information_for_patients = Column(String)
-    information_for_patients_table = Column(String)
-    instructions_for_use = Column(String)
-    instructions_for_use_table = Column(String)
-    keep_out_of_reach_of_children = Column(String)
-    keep_out_of_reach_of_children_table = Column(String)
-    other_safety_information = Column(String)
-    other_safety_information_table = Column(String)
-    patient_medication_information = Column(String)
-    patient_medication_information_table = Column(String)
-    questions = Column(String)
-    questions_table = Column(String)
-    spl_medguide = Column(String)
-    spl_medguide_table = Column(String)
-    spl_patient_package_insert = Column(String)
-    spl_patient_package_insert_table = Column(String)
-    stop_use = Column(String)
-    stop_use_table = Column(String)
-    when_using = Column(String)
-    when_using_table = Column(String)
-    clinical_studies = Column(String)
-    clinical_studies_table = Column(String)
-    references = Column(String)
-    references_table = Column(String)
-    geriatric_use = Column(String)
-    geriatric_use_table = Column(String)
-    labor_and_delivery = Column(String)
-    labor_and_delivery_table = Column(String)
-    nursing_mothers = Column(String)
-    nursing_mothers_table = Column(String)
-    pediatric_use = Column(String)
-    pediatric_use_table = Column(String)
-    pregnancy = Column(String)
-    pregnancy_or_breast_feeding = Column(String)
-    pregnancy_or_breast_feeding_table = Column(String)
-    pregnancy_table = Column(String)
-    teratogenic_effects = Column(String)
-    teratogenic_effects_table = Column(String)
-    use_in_specific_populations = Column(String)
-    use_in_specific_populations_table = Column(String)
-    how_supplied = Column(String)
-    how_supplied_table = Column(String)
-    safe_handling_warning = Column(String)
-    safe_handling_warning_table = Column(String)
-    storage_and_handling = Column(String)
-    storage_and_handling_table = Column(String)
-    boxed_warning = Column(String)
-    boxed_warning_table = Column(String)
-    general_precautions = Column(String)
-    general_precautions_table = Column(String)
-    precautions = Column(String)
-    precautions_table = Column(String)
-    user_safety_warnings = Column(String)
-    user_safety_warnings_table = Column(String)
-    warnings = Column(String)
-    warnings_table = Column(String)
+    from db.drug_snapshot_runtime.label import Label as _ArchiveLabel
+
+    __tablename__ = "label"
+    __table__ = _ArchiveLabel.__table__.to_metadata(db.Model.metadata)
+    if TYPE_CHECKING:
+        id = _ArchiveLabel.id
+        set_id = _ArchiveLabel.set_id
 
 
 class DrugConditionEvidence(db.Model, JSONOutputMixin):
-    __tablename__ = 'drug_condition_evidence'
-    __table_args__ = (
-        {'schema': os.getenv('DB_SCHEMA') or 'rx_data', 'extend_existing': True},
-    )
+    __tablename__ = "drug_condition_evidence"
+    __table_args__ = ({"schema": os.getenv("DB_SCHEMA") or "rx_data", "extend_existing": True},)
     evidence_id = Column(String, primary_key=True)
     set_id = Column(String)
     label_id = Column(String)

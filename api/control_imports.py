@@ -4,7 +4,6 @@ import datetime
 import json
 import os
 import uuid
-from contextlib import suppress
 from typing import Any
 
 import msgpack
@@ -16,8 +15,12 @@ from sqlalchemy.exc import IntegrityError
 from api.control_run_store import insert_import_run, update_import_run_after_enqueue
 from db.models import db
 from process.import_status_events import enqueue_status_event
-from process.live_progress import (enqueue_live_progress, estimate_payload_from_live, progress_payload_from_live,
-                                   read_live_progress)
+from process.live_progress import (
+    enqueue_live_progress,
+    estimate_payload_from_live,
+    progress_payload_from_live,
+    read_live_progress,
+)
 from process.redis_config import redis_dsn, redis_settings
 
 ENGINE_NAME = "drug-api"
@@ -62,7 +65,7 @@ _IMPORTERS: dict[str, dict[str, Any]] = {
 
 
 def utc_now() -> datetime.datetime:
-    """Return the current UTC timestamp for import-control records."""
+    """Return the current UTC timestamp for import records."""
     return datetime.datetime.utcnow()
 
 
@@ -111,7 +114,7 @@ async def ensure_import_run_table() -> None:
 
 
 def importer_registry() -> list[dict[str, Any]]:
-    """Return importers this service can expose to import-control clients."""
+    """Return importers this service can expose to control clients."""
     return [
         {
             "name": name,
@@ -215,8 +218,15 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
             if active:
                 return active, False
         raise
+    if importer == "ndc":
+        async with db.session() as session:
+            await session.commit()
     enqueue_update = await _enqueue(spec, run_record_dict)
-    await update_import_run_after_enqueue(schema, run_id, enqueue_update)
+    if await update_import_run_after_enqueue(schema, run_id, enqueue_update) != 1:
+        current_run = await get_import_run(run_id)
+        if current_run is None:
+            raise RuntimeError("import run disappeared after enqueue")
+        return current_run, True
     created_run_dict = {**run_record_dict, **enqueue_update}
     enqueue_status_event(created_run_dict)
     _write_run_live_progress(created_run_dict, publish_event=False)
@@ -319,7 +329,7 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
         cancel_signal = await _remove_queued_job(run)
         progress_payload_dict = {"unit": "run", "total": 1, "done": 1, "pct": 100, "message": "canceled"}
         metrics_payload_dict = {**(run.get("metrics") or {}), "cancel_signal": cancel_signal}
-        await db.status(
+        changed = await db.status(
             text(
                 f"""
             UPDATE {_schema()}.import_run
@@ -330,6 +340,8 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
                    progress = :progress,
                    metrics = :metrics
              WHERE run_id = :run_id
+               AND (importer <> 'ndc' OR (status='queued'
+                    AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id')))
             """
             ),
             run_id=run_id,
@@ -338,7 +350,7 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
             metrics=json.dumps(metrics_payload_dict),
         )
         updated = await get_import_run(run_id)
-        if updated:
+        if updated and changed == 1:
             _write_run_live_progress({**updated, "progress": progress_payload_dict}, publish_event=False)
             enqueue_status_event({**updated, "progress": progress_payload_dict, "metrics": metrics_payload_dict})
         return updated

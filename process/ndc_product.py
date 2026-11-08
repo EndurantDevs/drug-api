@@ -1,54 +1,50 @@
 import asyncio
-import datetime
 import logging
 import os
 import re
-from json import loads
+import uuid
 from typing import Optional
 
 import msgpack
 from arq import create_pool
 from dateutil.parser import parse as parse_date
-from sqlalchemy.inspection import inspect
 
 from db.connection import init_db
 from db.models import Package, Product, db
-from process.control_lifecycle import mark_control_run
-from process.ext.utils import download_it, make_class, print_time_info, push_objects
+from process.control_lifecycle import ensure_import_run_table
+from process.import_status_events import enqueue_status_event
 from process.live_progress import enqueue_live_progress
+from process.ndc_acquire import acquire_ndc_manifest, consume_ndc_partitions
 from process.ndc_publish import publish_ndc_tables
-from process.partition_download import PartitionDownloadSpec, download_partition_content
+from process.ndc_stage import (
+    create_ndc_stages,
+    discard_ndc_stages,
+    fail_ndc_attempt,
+    new_ndc_attempt,
+    save_ndc_batch,
+)
 from process.redis_config import redis_settings
 
 logger = logging.getLogger(__name__)
 
-product_description_re = re.compile(r'(\d+) (.*?) in (\d+) (.*?) \(\d+-\d+-\d+\)')
+product_description_re = re.compile(r"(\d+) (.*?) in (\d+) (.*?) \(\d+-\d+-\d+\)")
 NDC_QUEUE_NAME = (
-    os.environ.get('HLTHPRT_ARQ_QUEUE_NDC')
-    or os.environ.get('ARQ_QUEUE_NDC')
-    or 'arq:queue:drug-api-import-ndc'
-)
-NDC_DOWNLOAD_SPEC = PartitionDownloadSpec(
-    importer="ndc",
-    model="product",
-    result_job_name="process_results",
-    start_message="Starting NDC data download: ",
-    item_label="records",
+    os.environ.get("HLTHPRT_ARQ_QUEUE_NDC") or os.environ.get("ARQ_QUEUE_NDC") or "arq:queue:drug-api-import-ndc"
 )
 
 
 def _derive_is_otc(res: dict) -> Optional[bool]:
-    marketing_category = str(res.get('marketing_category') or '').strip().lower()
-    product_type = str(res.get('product_type') or '').strip().lower()
-    openfda_payload = res.get('openfda') or {}
-    openfda_product_type = " ".join(str(item) for item in (openfda_payload.get('product_type') or [])).strip().lower()
+    marketing_category = str(res.get("marketing_category") or "").strip().lower()
+    product_type = str(res.get("product_type") or "").strip().lower()
+    openfda_payload = res.get("openfda") or {}
+    openfda_product_type = " ".join(str(item) for item in (openfda_payload.get("product_type") or [])).strip().lower()
     signal = " ".join(part for part in (marketing_category, product_type, openfda_product_type) if part)
 
     if not signal:
         return None
-    if 'otc' in signal or 'over-the-counter' in signal or 'over the counter' in signal:
+    if "otc" in signal or "over-the-counter" in signal or "over the counter" in signal:
         return True
-    if 'prescription' in signal or signal.startswith('rx ') or ' rx ' in f' {signal} ':
+    if "prescription" in signal or signal.startswith("rx ") or " rx " in f" {signal} ":
         return False
     return None
 
@@ -56,7 +52,7 @@ def _derive_is_otc(res: dict) -> Optional[bool]:
 def _record_column_value(record_dict: dict, column_name: str) -> object:
     raw_value = record_dict.get(column_name)
     if ("_date" in column_name) and raw_value:
-        return parse_date(raw_value, fuzzy=True)
+        return parse_date(raw_value, fuzzy=True).date()
     if raw_value:
         return raw_value
     return None
@@ -64,17 +60,15 @@ def _record_column_value(record_dict: dict, column_name: str) -> object:
 
 def _product_row_dict_from_record(product_record: dict, product_columns: list[str]) -> dict[str, object]:
     product_row_dict = {
-        product_column: _record_column_value(product_record, product_column)
-        for product_column in product_columns
+        product_column: _record_column_value(product_record, product_column) for product_column in product_columns
     }
-    openfda_dict = product_record.get('openfda') or {}
-    rxnorm_values = openfda_dict.get('rxcui') or []
-    product_row_dict['rxnorm_ids'] = [str(rxnorm_value) for rxnorm_value in rxnorm_values]
-    product_row_dict['is_otc'] = _derive_is_otc(product_record)
+    openfda_dict = product_record.get("openfda") or {}
+    rxnorm_values = openfda_dict.get("rxcui") or []
+    product_row_dict["rxnorm_ids"] = [str(rxnorm_value) for rxnorm_value in rxnorm_values]
+    product_row_dict["is_otc"] = _derive_is_otc(product_record)
 
-    if not ('dosage_form' in product_row_dict) and product_row_dict['dosage_form']:
-        product_row_dict['dosage_form'] = ''
-    product_row_dict['short_dosage_form'] = product_row_dict['dosage_form'].split(',')[0]
+    product_row_dict["dosage_form"] = product_row_dict["dosage_form"] or ""
+    product_row_dict["short_dosage_form"] = product_row_dict["dosage_form"].split(",")[0]
     return product_row_dict
 
 
@@ -84,9 +78,9 @@ def _package_column_value(
     package_column: str,
 ) -> object:
     if ("_date" in package_column) and package_record.get(package_column):
-        return parse_date(package_record.get(package_column), fuzzy=True)
-    if package_column in ['product_ndc', 'package_ndc']:
-        package_record['product_ndc'] = product_row_dict['product_ndc']
+        return parse_date(package_record.get(package_column), fuzzy=True).date()
+    if package_column in ["product_ndc", "package_ndc"]:
+        package_record["product_ndc"] = product_row_dict["product_ndc"]
         return package_record.get(package_column)
     if package_record.get(package_column):
         return package_record.get(package_column)
@@ -94,36 +88,34 @@ def _package_column_value(
 
 
 def _normalize_package_ndc(package_row_dict: dict) -> None:
-    if len(package_row_dict['package_ndc']) < 12:
-        package_row_dict['package_ndc'] = '-'.join(
-            (package_row_dict['product_ndc'], package_row_dict['package_ndc'])
-        )
+    if len(package_row_dict["package_ndc"]) < 12:
+        package_row_dict["package_ndc"] = "-".join((package_row_dict["product_ndc"], package_row_dict["package_ndc"]))
 
-    ndc_segments = package_row_dict['package_ndc'].split('-')
-    if len(''.join(ndc_segments)) != 11:
+    ndc_segments = package_row_dict["package_ndc"].split("-")
+    if len("".join(ndc_segments)) != 11:
         if len(ndc_segments[0]) == 4:
-            ndc_segments[0] = '0' + ndc_segments[0]
+            ndc_segments[0] = "0" + ndc_segments[0]
         elif len(ndc_segments[1]) == 3:
-            ndc_segments[1] = '0' + ndc_segments[1]
+            ndc_segments[1] = "0" + ndc_segments[1]
         elif len(ndc_segments[2]) == 1:
-            ndc_segments[2] = '0' + ndc_segments[2]
-    package_row_dict['ndc11'] = ''.join(ndc_segments)
+            ndc_segments[2] = "0" + ndc_segments[2]
+    package_row_dict["ndc11"] = "".join(ndc_segments)
 
 
 def _apply_package_description(package_row_dict: dict, product_row_dict: dict) -> None:
-    description_match = product_description_re.match(package_row_dict['description'])
+    description_match = product_description_re.match(package_row_dict["description"])
     if not description_match:
         return
     (
-        package_row_dict['size'],
-        package_row_dict['size_extra'],
-        package_row_dict['packages_number'],
-        package_row_dict['package_format'],
+        package_row_dict["size"],
+        package_row_dict["size_extra"],
+        package_row_dict["packages_number"],
+        package_row_dict["package_format"],
     ) = description_match.groups()
-    package_row_dict['size'] = int(package_row_dict['size'])
-    package_row_dict['packages_number'] = int(package_row_dict['packages_number'])
-    if package_row_dict['size_extra'] == product_row_dict['dosage_form']:
-        package_row_dict['size_extra'] = ''
+    package_row_dict["size"] = int(package_row_dict["size"])
+    package_row_dict["packages_number"] = int(package_row_dict["packages_number"])
+    if package_row_dict["size_extra"] == product_row_dict["dosage_form"]:
+        package_row_dict["size_extra"] = ""
 
 
 def _package_row_dict_from_record(
@@ -135,227 +127,193 @@ def _package_row_dict_from_record(
         package_column: _package_column_value(package_record, product_row_dict, package_column)
         for package_column in package_columns
     }
-    package_row_dict['product_ndc'] = product_row_dict['product_ndc']
-    if not ('description' in package_row_dict) and package_row_dict['description']:
-        package_row_dict['description'] = ''
+    package_row_dict["product_ndc"] = product_row_dict["product_ndc"]
+    package_row_dict["description"] = package_row_dict["description"] or ""
 
     _normalize_package_ndc(package_row_dict)
     _apply_package_description(package_row_dict, product_row_dict)
     return package_row_dict
 
 
-async def download_content(ctx, task):
-    """Download one FDA NDC partition and enqueue product parse batches."""
-    return await download_partition_content(ctx, task, NDC_DOWNLOAD_SPEC)
+def _package_rows_from_record(source_record: dict, product: dict, package_columns: list[str]) -> list[dict]:
+    """Keep every package occurrence, representing contradictory start dates as unknown."""
+    rows = [_package_row_dict_from_record(package, product, package_columns) for package in source_record["packaging"]]
+    dates_by_package = {}
+    for row in rows:
+        dates_by_package.setdefault(row["package_ndc"], set()).add(row["marketing_start_date"])
+    ambiguous = {key for key, dates in dates_by_package.items() if len(dates) > 1}
+    if ambiguous:
+        logger.warning(
+            "NDC package start dates disagree within one product; using unknown dates for %d identities", len(ambiguous)
+        )
+    for row in rows:
+        if row["package_ndc"] in ambiguous:
+            row["marketing_start_date"] = None
+    return rows
 
 
 async def process_results(ctx, task):
-    """Normalize FDA NDC records into product and package import rows."""
-    import_date = ctx['import_date']
-    ctx['context']['run'] += 1
-    run_id = task.get('run_id') or ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
-    myproduct = make_class(Product, import_date)
-    mypackage = make_class(Package, import_date)
-
-    product_columns = [column.name for column in inspect(myproduct).c]
-    package_columns = [column.name for column in inspect(Package).c]
-
-    product_rows = []
-    package_rows = []
-    for product_record in task['results']:
-        product_row_dict = _product_row_dict_from_record(product_record, product_columns)
-        for package_record in product_record['packaging']:
-            package_rows.append(_package_row_dict_from_record(package_record, product_row_dict, package_columns))
-        product_rows.append(product_row_dict)
-
-    package_by_ndc = {}
-    for package_row_dict in package_rows:
-        package_ndc = package_row_dict.get('package_ndc')
-        if package_ndc:
-            package_by_ndc[package_ndc] = package_row_dict
-    product_by_id = {}
-    for product_row_dict in product_rows:
-        product_id = product_row_dict.get('product_id')
-        if product_id:
-            product_by_id[product_id] = product_row_dict
-
-    await push_objects(list(package_by_ndc.values()), mypackage)
-    await push_objects(list(product_by_id.values()), myproduct)
+    """Normalize and acknowledge one complete batch against its coordinator's stages."""
+    attempt = ctx["ndc_attempt"]
+    product_columns = [column.name for column in Product.__table__.columns]
+    package_columns = [column.name for column in Package.__table__.columns]
+    products = []
+    packages = []
+    for source_record in task["results"]:
+        product = _product_row_dict_from_record(source_record, product_columns)
+        packages.extend(_package_rows_from_record(source_record, product, package_columns))
+        products.append(product)
+    await save_ndc_batch(db, attempt, products, packages)
     enqueue_live_progress(
-        run_id=run_id,
+        run_id=attempt.run_id,
         importer="ndc",
         status="running",
         phase="ndc saving records",
         unit="records",
-        done=task.get('batch_end') or len(task.get('results') or []),
-        total=task.get('partition_records') or None,
-        message=f"saved {len(product_by_id)} products",
+        done=attempt.counts["source_products"],
+        message=f"acquired {attempt.counts['source_products']} products and {attempt.counts['source_packages']} packages",
     )
 
 
 async def startup(ctx):
-    """Prepare dated product and package import tables before workers start."""
-    loop = asyncio.get_event_loop()
-    ctx['context'] = {}
-    ctx['context']['start'] = datetime.datetime.now()
-    ctx['context']['run'] = 0
-    ctx['import_date'] = datetime.datetime.now().strftime("%Y%m%d")
-    await init_db(db, loop)
-    import_date = ctx['import_date']
-    db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
-    await db.status(f"CREATE SCHEMA IF NOT EXISTS {db_schema};")
-    await db.status(f"DROP TABLE IF EXISTS {db_schema}.product_{import_date};")
-    await db.status(f"DROP TABLE IF EXISTS {db_schema}.package_{import_date};")
-    myproduct = make_class(Product, import_date)
-    mypackage = make_class(Package, import_date)
-    await db.create_table(myproduct.__table__)
-    await db.create_table(mypackage.__table__)
-    print("Preparing done")
+    """Connect the worker without adopting or dropping another attempt's stages."""
+    await init_db(db, asyncio.get_running_loop())
 
 
 async def shutdown(ctx):
-    """Publish or fail the NDC import and mark the control run."""
-    try:
-        await _shutdown_impl(ctx)
-    except Exception as exc:
-        control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
-        try:
-            await mark_control_run(
-                control_run_id,
-                status="failed",
-                phase_detail="ndc import shutdown failed",
-                progress_message="failed",
-                error={"code": "shutdown_failed", "message": str(exc)},
-            )
-        except Exception as mark_exc:
-            logger.warning("failed to mark ndc import shutdown failure: %s", mark_exc)
-        raise
-
-
-async def _shutdown_impl(ctx):
-    """Validate product counts, swap NDC tables, and report final status."""
-    import_date = ctx['import_date']
-    control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
-    if not ctx['context'].get('product_count'):
-        print('Product import failed')
-        await mark_control_run(
-            control_run_id,
-            status="failed",
-            phase_detail="ndc import failed",
-            progress_message="failed",
-            error={"code": "import_failed", "message": "product_count was not set"},
-        )
-        return
-
-    myproduct = make_class(Product, import_date)
-    import_product_count = await db.select(db.func.count(myproduct.product_id)).scalar()
-    expected_product_count = int(ctx['context']['product_count'])
-    minimum_expected = int(expected_product_count * 0.95)
-    if not import_product_count or import_product_count < minimum_expected:
-        print(f"Aborted: Imported rows Number differs from FDA rows number! "
-              f"(JSON: {expected_product_count}, DB: {import_product_count})")
-        await mark_control_run(
-            control_run_id,
-            status="failed",
-            phase_detail="ndc import validation failed",
-            progress_message="failed",
-            error={"code": "validation_failed", "message": "imported product count below expected threshold"},
-        )
-        return
-
-    db_schema = os.getenv('DB_SCHEMA') if os.getenv('DB_SCHEMA') else 'rx_data'
-    await publish_ndc_tables(db, db_schema, import_date)
-    await _mark_ndc_success(ctx, control_run_id, expected_product_count, import_product_count)
-
-
-async def _mark_ndc_success(
-    ctx: dict,
-    control_run_id: str | None,
-    expected_product_count: int,
-    import_product_count: int,
-) -> None:
-    print('Products in JSON:', expected_product_count)
-    print('Products in DB: ', await db.select(db.func.count(Product.product_id)).scalar())
-    print('Packages in DB: ', await db.select(db.func.count(Package.package_ndc)).scalar())
-    if import_product_count != expected_product_count:
-        print(
-            f"WARNING: Source total_records ({expected_product_count}) "
-            f"does not exactly match imported unique product rows ({import_product_count})."
-        )
-    print_time_info(ctx['context']['start'])
-    await mark_control_run(
-        control_run_id,
-        status="succeeded",
-        phase_detail="ndc import published",
-        progress_message="succeeded",
-        metrics={"source_product_count": expected_product_count, "imported_product_count": import_product_count},
-        progress={
-            "unit": "records",
-            "total": expected_product_count,
-            "done": import_product_count,
-            "pct": 100,
-            "message": "succeeded",
-            "phase": "ndc import published",
-        },
-    )
+    """Close the worker connection pool; completion belongs to the coordinator job."""
+    await db.disconnect()
 
 
 async def init_file(ctx, task=None):
-    """Load the FDA NDC manifest and enqueue one task per selected partition."""
+    """Await complete acquisition and the process-selected atomic publication or handoff."""
     task = task if isinstance(task, dict) else {}
-    if task.get('run_id'):
-        ctx['control_run_id'] = task.get('run_id')
-        ctx.setdefault('context', {})['control_run_id'] = task.get('run_id')
-    test_mode = bool(task.get('test_mode') or task.get('test'))
-    max_records = int(task.get('max_records') or os.environ.get('HLTHPRT_DRUG_IMPORT_TEST_MAX_RECORDS') or 5000)
-    redis = await create_pool(redis_settings(),
-                              default_queue_name=NDC_QUEUE_NAME,
-                              job_serializer=msgpack.packb,
-                              job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
-    print('Downloading data from: ', os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
-    response_content = await download_it(os.environ['HLTHPRT_MAIN_RX_JSON_URL'])
-    # it is very small in this case
-    manifest_dict = loads(response_content.content)
-    partitions = list(manifest_dict['results']['drug']['ndc']['partitions'])
-    if test_mode:
-        partitions = partitions[:1]
-        ctx['context']['product_count'] = min(max_records, int(partitions[0].get('records') or max_records)) if partitions else 0
-    else:
-        ctx['context']['product_count'] = manifest_dict['results']['drug']['ndc']['total_records']
-    print(f"Going to import {ctx['context']['product_count']} rows")
-    control_run_id = ctx.get('control_run_id') or ctx.get('context', {}).get('control_run_id')
-    await mark_control_run(
-        control_run_id,
-        status="running",
-        phase_detail="ndc partitions enqueued",
-        progress_message=f"queued {len(partitions)} partition(s)",
-        metrics={"source_product_count": ctx['context']['product_count'], "partition_count": len(partitions)},
-        progress={
-            "unit": "records",
-            "total": ctx['context']['product_count'],
-            "done": 0,
-            "pct": 0,
-            "message": f"queued {len(partitions)} partition(s)",
-        },
-    )
-    for partition_index, part in enumerate(partitions, start=1):
-        partition_task_dict = {
-            'what': 'ndc',
-            'file': part['file'],
-            'run_id': control_run_id,
-            'partition_records': min(max_records, int(part.get('records') or max_records)) if test_mode else int(part.get('records') or 0),
-            'partition_index': partition_index,
-            'partition_count': len(partitions),
-        }
-        if test_mode:
-            partition_task_dict['max_records'] = max_records
-        await redis.enqueue_job('download_content', partition_task_dict)
+    standalone_id = uuid.uuid5(uuid.NAMESPACE_URL, str(ctx["job_id"])) if ctx.get("job_id") else uuid.uuid4()
+    run_id = task.get("run_id") or "ndc-" + standalone_id.hex
+    attempt = new_ndc_attempt(run_id, os.getenv("DB_SCHEMA") or "rx_data")
+    # Each partition inherits only this attempt, never a previous worker's context.
+    local_context_dict = {"ndc_attempt": attempt}
+
+    async def consume_batch(records):
+        """Acknowledge only a complete paired write for this attempt."""
+        await process_results(local_context_dict, {"results": records})
+
+    try:
+        async with asyncio.timeout(120):
+            await ensure_import_run_table()
+            await create_ndc_stages(db, attempt, standalone=not bool(task.get("run_id")))
+        is_sample = bool(task.get("test_mode") or task.get("test"))
+        max_records = int(task.get("max_records") or os.getenv("HLTHPRT_DRUG_IMPORT_TEST_MAX_RECORDS") or 5000)
+        if max_records <= 0:
+            raise ValueError("NDC sample record limit must be positive")
+        manifest = await acquire_ndc_manifest(
+            os.environ["HLTHPRT_MAIN_RX_JSON_URL"],
+            sample=is_sample,
+            max_records=max_records,
+        )
+        acquisition = await consume_ndc_partitions(manifest, consume_batch)
+        async with asyncio.timeout(1800):
+            receipt = await publish_ndc_tables(
+                db, attempt.schema, attempt.suffix, attempt=attempt, acquisition=acquisition
+            )
+    except BaseException:
+        try:
+            async with asyncio.timeout(10):
+                if await fail_ndc_attempt(db, attempt) == 1:
+                    _announce_ndc_failure(attempt)
+        except Exception:
+            logger.warning("NDC failure status could not be recorded")
+        try:
+            async with asyncio.timeout(10):
+                await discard_ndc_stages(db, attempt)
+        except Exception:
+            logger.warning("NDC owned-stage cleanup failed; retained for inspection")
+        raise
+    _announce_ndc_completion(attempt, receipt)
+    return receipt
+
+
+def _announce_ndc_completion(attempt, receipt):
+    if receipt.get("format") == "ndc-stage-handoff-v1":
+        _announce_ndc_handoff(attempt)
+        return
+    phase = "ndc import published" if receipt["complete"] else "ndc sample validated"
+    try:
+        enqueue_status_event(
+            {
+                "run_id": attempt.run_id,
+                "importer": "ndc",
+                "status": "succeeded",
+                "phase_detail": phase,
+                "finished_at": receipt.get("completed_at"),
+                "metrics": {
+                    "ndc_attempt_id": attempt.suffix,
+                    "ndc_publication" if receipt["complete"] else "ndc_sample": receipt,
+                    "source_product_count": attempt.counts["source_products"],
+                    "imported_product_count": attempt.counts["product"],
+                },
+                "progress": {
+                    "unit": "records",
+                    "done": attempt.counts["source_products"],
+                    "total": attempt.counts["source_products"],
+                    "pct": 100,
+                    "message": "succeeded",
+                },
+            }
+        )
+        enqueue_live_progress(
+            run_id=attempt.run_id,
+            importer="ndc",
+            status="succeeded",
+            unit="records",
+            done=attempt.counts["source_products"],
+            total=attempt.counts["source_products"],
+            pct=100,
+            phase=phase,
+            message="succeeded",
+        )
+    except Exception:
+        logger.warning("NDC completion event unavailable; native success is already committed")
+
+
+def _announce_ndc_handoff(attempt):
+    """Report committed stage ownership transfer without claiming publication success."""
+    try:
+        enqueue_live_progress(
+            run_id=attempt.run_id,
+            importer="ndc",
+            status="finalizing",
+            unit="records",
+            done=attempt.counts["source_products"],
+            phase="ndc stages awaiting publication",
+            message="completed stages await publication",
+        )
+    except Exception:
+        logger.warning("NDC handoff event unavailable; native handoff is already committed")
 
 
 async def main():
     """Enqueue the default NDC import manifest task."""
-    redis = await create_pool(redis_settings(),
-                              default_queue_name=NDC_QUEUE_NAME,
-                              job_serializer=msgpack.packb,
-                              job_deserializer=lambda b: msgpack.unpackb(b, raw=False))
-    await redis.enqueue_job('init_file')
+    redis = await create_pool(
+        redis_settings(),
+        default_queue_name=NDC_QUEUE_NAME,
+        job_serializer=msgpack.packb,
+        job_deserializer=lambda b: msgpack.unpackb(b, raw=False),
+    )
+    await redis.enqueue_job("init_file")
+
+
+def _announce_ndc_failure(attempt):
+    try:
+        enqueue_status_event(
+            {
+                "run_id": attempt.run_id,
+                "importer": "ndc",
+                "status": "failed",
+                "phase_detail": "ndc import failed",
+                "metrics": {"ndc_attempt_id": attempt.suffix},
+                "error": {"code": "ndc_import_failed"},
+            }
+        )
+    except Exception:
+        logger.warning("NDC failure event could not be queued; native failure retained")

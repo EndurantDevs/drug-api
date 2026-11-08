@@ -1,21 +1,29 @@
-FROM python:3.13.15-slim-trixie@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
+FROM python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6 AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:0.12.17@sha256:10787c682e4184e4f290de1171fd4703dc63de99221f10fe1c99002ce7fa9acc \
+    /uv /usr/local/bin/uv
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never
+WORKDIR /opt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev \
+    && uv cache clean
+
+FROM python:3.14.7-slim-trixie@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 ARG HLTHPRT_SOURCE_COMMIT
-ARG PIP_VERSION=26.2.1
 LABEL org.opencontainers.image.revision=${HLTHPRT_SOURCE_COMMIT}
-
-WORKDIR /wheels
-ADD ./requirements.txt /wheels
+RUN test "${#HLTHPRT_SOURCE_COMMIT}" -eq 40 \
+    && printf '%s' "${HLTHPRT_SOURCE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$' \
+    && test "${HLTHPRT_SOURCE_COMMIT}" != "0000000000000000000000000000000000000000" \
+    && install -d -o root -g root -m 0755 /opt/healthporta/build-identity \
+    && printf '%s\n' "${HLTHPRT_SOURCE_COMMIT}" > /opt/healthporta/build-identity/drug-source-commit \
+    && chmod 0444 /opt/healthporta/build-identity/drug-source-commit
 
 WORKDIR /opt
 RUN apt-get update \
     && if apt-cache show libaio1t64 >/dev/null 2>&1; then LIBAIO_PKG=libaio1t64; else LIBAIO_PKG=libaio1; fi \
-    && apt-get install -y --no-install-recommends "${LIBAIO_PKG}" gcc g++ make libc6-dev pkg-config git curl nginx \
-    && python3 -m venv venv \
-    && . venv/bin/activate \
-    && pip install --no-compile "pip==${PIP_VERSION}" \
-    && pip install --no-compile -r /wheels/requirements.txt -f /wheels \
-    && pip check \
+    && apt-get install -y --no-install-recommends "${LIBAIO_PKG}" nginx \
     && install -d -o nobody -g nogroup -m 755 /run /var/log/nginx \
     && install -d -o nobody -g nogroup -m 700 \
         /var/lib/nginx/body \
@@ -23,11 +31,9 @@ RUN apt-get update \
         /var/lib/nginx/fastcgi \
         /var/lib/nginx/uwsgi \
         /var/lib/nginx/scgi \
-    && rm -rf /wheels \
-    && rm -rf /root/.cache/pip/* \
-    && find . -name '*.pyc' -delete \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
 
 ARG HLTHPRT_LOG_CFG=./logging.yaml
 ARG HLTHPRT_RELEASE="dev"

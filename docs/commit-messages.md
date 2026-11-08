@@ -67,8 +67,8 @@ Automation exceptions are allowed for GitHub merge commits, GitHub generated
 ## Local Check
 
 ```bash
-python3 scripts/check_commit_messages.py --message "fix(api): handle upstream timeout"
-python3 scripts/check_commit_messages.py --last 3
+uv run --locked python scripts/check_commit_messages.py --message "fix(api): handle upstream timeout"
+uv run --locked python scripts/check_commit_messages.py --last 3
 ```
 
 This policy is based on the practical parts of Conventional Commits, common Git

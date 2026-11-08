@@ -1,6 +1,6 @@
 # Contributing
 
-Work from the repo root in an activated virtualenv. Keep changes focused.
+Work from the repo root after `uv sync --locked`. Keep changes focused.
 
 ## Contributor License Agreement
 
@@ -18,9 +18,21 @@ pull request.
 ## Branches
 
 Create feature and fix branches from `dev` and open normal pull requests into
-`dev`. After CI and development acceptance, maintainers promote the reviewed
-content to stable `main` through a release pull request using **Rebase and merge**.
-The public default branch remains `main`.
+`dev`. Run focused local checks for the changed behavior; GitHub CI is the
+full-validation gate. After merge, maintainers verify the development deployment
+and its behavior before considering the change accepted.
+
+Do not run local aggregate pre-push hooks. Push with `git push --no-verify`;
+GitHub CI remains required.
+
+Once `dev` is stable, maintainers prepare a release to `main` only when a human
+requests it. Promote reviewed content through a release pull request using
+**Rebase and merge**. Passing CI or merging into `dev` does not itself request a
+production release. The public default branch remains `main`.
+
+For a security update proposed against `main`, maintainers first port the change
+to `dev` and complete the normal validation and release flow. Preserve the
+original pull request until the reviewed replacement is linked.
 
 Use `type/short-slug` names: `feature/<slug>`, `fix/<slug>`,
 `docs/<slug>`, `test/<slug>`, or `chore/<slug>`.
@@ -28,8 +40,33 @@ Use `type/short-slug` names: `feature/<slug>`, `fix/<slug>`,
 ## Commit Messages
 
 Use the style in [docs/commit-messages.md](docs/commit-messages.md). Run
-`python3 scripts/check_commit_messages.py --last 1` before pushing
+`uv run --locked python scripts/check_commit_messages.py --range origin/dev..HEAD` before pushing
 hand-written commits.
+
+## Public content
+
+Review the exact files, branch names, commit subjects and bodies, pull request
+titles and descriptions, comments, reviews, releases, check summaries, logs, and
+artifacts before publication or editing. Describe public code, behavior, and
+validation using synthetic examples. Verify that referenced repositories and
+resources are public; omit private project names, configuration details,
+hostnames, local paths, credentials, and personal or customer data. Prior
+publication does not establish permission to repeat a detail.
+
+Run the focused check on proposed text and candidate files:
+
+```bash
+uv run --locked python scripts/ci/public_hygiene.py --include-untracked \
+  --text-file proposed-title.txt --text-file proposed-description.txt
+uv run --locked python scripts/check_commit_messages.py --range origin/dev..HEAD
+```
+
+The check also validates pull request metadata and push messages in the CI event.
+It detects known patterns; a passing result does not establish that every
+reference is public. Manually inspect the remaining content and re-read the
+published result after each write. Correct editable disclosures without
+repeating the removed material in a comment. Keep private reference inventories
+outside the repository.
 
 ## Tests
 
@@ -41,10 +78,28 @@ Use the [local setup](README.md#local-setup) to install contributor dependencies
 For example, validate synthetic NDC normalization and publication behavior with:
 
 ```bash
-python -m pytest -q tests/process/test_ndc_rxnorm_mapping.py \
+uv run --locked pytest -q tests/process/test_ndc_rxnorm_mapping.py \
   tests/process/test_import_table_switching.py
 ```
 
 These tests do not require PostgreSQL, Redis or source downloads. API contract
-checks are available with `python -m pytest -q tests/test_openapi_spec.py`.
+checks are available with `uv run --locked pytest -q tests/test_openapi_spec.py`.
 GitHub CI is the full-validation gate; no local aggregate gate is required.
+
+## Python quality
+
+Ruff is the Python linter, import sorter, and formatter:
+
+```bash
+uv run --locked ruff check --select E9,F api db process scripts tests main.py
+uv run --locked ruff check --select I api db process tests main.py
+uv run --locked ruff format --check tests/test_public_ci.py
+```
+
+Run the import-order and formatting checks on the Python files you changed.
+CI requires sorted imports and formatting for added or modified Python files.
+Only touched files need adoption; unrelated historical files retain their
+readability baseline. Runtime import smoke tests and the existing application
+and import tests validate actual dependency APIs and source-module imports.
+The readability budget remains the naming and complexity policy, and its
+physical-line limits must not be relaxed to accommodate wrapping.
