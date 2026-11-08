@@ -32,4 +32,4 @@ HealthPorta provides:
 - MCP-based integration for AI agents and internal company systems
 - a production-ready path for syncing fresh drug data into customer products and internal workflows
 
-MCP and agent integration details are available at [HealthPorta MCP](https://app.healthporta.com/mcp).
+MCP and agent integration details are available in the [MCP integration guide](https://app.healthporta.com/mcp).

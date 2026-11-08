@@ -26,7 +26,7 @@ _last_sent_by_run = _publisher_state.last_sent_by_run
 
 
 def enqueue_status_event(run_payload: dict[str, Any]) -> None:
-    """Queue a best-effort status event for import-control."""
+    """Queue a best-effort import status event."""
     if not _import_control_url():
         return
     run_id = str(run_payload.get("run_id") or "").strip()

@@ -60,11 +60,11 @@ were introduced. Do not regenerate it to make later failures pass; reduce it
 only when the corresponding debt is actually removed:
 
 ```bash
-python scripts/readability_budget.py --write-baseline
+uv run --locked python scripts/readability_budget.py --write-baseline
 ```
 
 Normal local check:
 
 ```bash
-python scripts/readability_budget.py --base origin/main
+uv run --locked python scripts/readability_budget.py --base origin/main
 ```

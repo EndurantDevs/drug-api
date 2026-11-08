@@ -14,7 +14,11 @@ from sqlalchemy import text
 
 from db.models import db
 from process.import_status_events import enqueue_status_event, flush_status_events
-from process.live_progress import enqueue_live_progress, reset_live_progress_context, set_live_progress_context
+from process.live_progress import (
+    enqueue_live_progress,
+    reset_live_progress_context,
+    set_live_progress_context,
+)
 
 
 @dataclass(frozen=True)
@@ -41,7 +45,7 @@ class ControlRunTransition:
 
 
 async def control_single_job_start(ctx: dict[str, Any], task: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Run one import-control job target and keep import_run state current."""
+    """Run one managed import job target and keep import_run state current."""
     control_task = _control_task_from_payload(ctx, task)
     if not control_task.target_module or not control_task.target_function:
         await mark_control_run(
@@ -98,7 +102,7 @@ async def control_single_job_start(ctx: dict[str, Any], task: dict[str, Any] | N
         await _stop_live_progress_heartbeat(heartbeat_task)
         if live_token is not None:
             reset_live_progress_context(live_token)
-    return {"status": "running", "run_id": control_task.run_id, "result": target_result}
+    return await _finish_native_result(control_task, target_result)
 
 
 def _control_task_from_payload(ctx: dict[str, Any], task: dict[str, Any] | None) -> ControlTask:
@@ -110,7 +114,9 @@ def _control_task_from_payload(ctx: dict[str, Any], task: dict[str, Any] | None)
         ctx["control_run_id"] = run_id
     return ControlTask(
         run_id=run_id,
-        importer=str(request_payload_dict.get("importer") or request_payload_dict.get("target_function") or "unknown").strip(),
+        importer=str(
+            request_payload_dict.get("importer") or request_payload_dict.get("target_function") or "unknown"
+        ).strip(),
         target_module=str(request_payload_dict.get("target_module") or "").strip(),
         target_function=str(request_payload_dict.get("target_function") or "").strip(),
         call_style=str(request_payload_dict.get("call_style") or "ctx_task").strip(),
@@ -124,9 +130,7 @@ async def _call_target_function(ctx: dict[str, Any], control_task: ControlTask) 
     accepted_params = signature(target_function).parameters
     if control_task.call_style == "kwargs":
         target_kwargs_dict = {
-            key: target_value
-            for key, target_value in control_task.target_task_dict.items()
-            if key in accepted_params
+            key: target_value for key, target_value in control_task.target_task_dict.items() if key in accepted_params
         }
         return await target_function(**target_kwargs_dict)
     if len(accepted_params) >= 2:
@@ -190,7 +194,9 @@ def _terminal_progress_from_result(target_function: str, result: Any) -> dict[st
             "total": scanned,
             "pct": 100,
             "message": "succeeded",
-            "phase": "drug indications import published" if result.get("published") else "drug indications import staged",
+            "phase": "drug indications import published"
+            if result.get("published")
+            else "drug indications import staged",
         }
     return None
 
@@ -227,7 +233,7 @@ async def mark_control_run(
         error=error,
     )
     cancel_guard = _cancel_guard_for_status(status)
-    await db.status(
+    changed = await db.status(
         text(
             f"""
         UPDATE {schema}.import_run
@@ -241,6 +247,7 @@ async def mark_control_run(
                error = :error
          WHERE run_id = :run_id
            {cancel_guard}
+           AND (importer <> 'ndc' OR NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id'))
         """
         ),
         run_id=run_id,
@@ -253,9 +260,9 @@ async def mark_control_run(
         metrics=None if metrics is None else json.dumps(metrics),
         error=None if error is None else json.dumps(error),
     )
-    enqueue_live_progress(
-        **_live_progress_payload(progress_payload_dict, transition)
-    )
+    if changed != 1:
+        return
+    enqueue_live_progress(**_live_progress_payload(progress_payload_dict, transition))
     enqueue_status_event(_status_event_payload(progress_payload_dict, transition))
 
 
@@ -292,7 +299,13 @@ def _cancel_guard_for_status(status: str) -> str:
 
 def _default_progress_payload(status: str, progress_message: str) -> dict[str, Any]:
     is_terminal = status in {"succeeded", "failed", "canceled", "dead_letter"}
-    return {"unit": "run", "total": 1, "done": 1 if is_terminal else 0, "pct": 100 if is_terminal else 0, "message": progress_message}
+    return {
+        "unit": "run",
+        "total": 1,
+        "done": 1 if is_terminal else 0,
+        "pct": 100 if is_terminal else 0,
+        "message": progress_message,
+    }
 
 
 def _live_progress_payload(
@@ -366,3 +379,31 @@ async def ensure_import_run_table() -> None:
               AND status IN ('queued', 'starting', 'running', 'finalizing', 'canceling');
         """
     )
+
+
+def _native_result_status(control_task: ControlTask, result: Any) -> str:
+    """Reflect the NDC coordinator's committed handoff or terminal result."""
+    if (
+        control_task.target_module == "process.ndc_product"
+        and isinstance(result, dict)
+        and result.get("format") == "ndc-stage-handoff-v1"
+        and result.get("run_id") == control_task.run_id
+        and result.get("complete") is True
+        and result.get("published") is False
+    ):
+        return "finalizing"
+    if (
+        control_task.target_module == "process.ndc_product"
+        and isinstance(result, dict)
+        and result.get("format") == "ndc-publication-v1"
+        and result.get("run_id") == control_task.run_id
+    ):
+        return "succeeded"
+    return "running"
+
+
+async def _finish_native_result(control_task: ControlTask, result: Any) -> dict[str, Any]:
+    result_status = _native_result_status(control_task, result)
+    if result_status == "succeeded":
+        await _flush_terminal_status_events()
+    return {"status": result_status, "run_id": control_task.run_id, "result": result}

@@ -32,11 +32,10 @@ Coverage.py version, report path, and SHA-256 content. Missing, expired, or
 mismatched required artifacts fail closed. Only exact base commits predating
 `machine_artifact_required` use their committed baseline for bootstrap.
 
-The existing test workload and requirements are unchanged. Historical baseline
-policy records Coverage.py 7.15.2 and pytest 9.0.3; this transition preserves
-those settings and the separately pinned current requirements. Candidate report
-provenance verifies the actual Coverage.py runtime version. GitHub CI remains
-the required full-validation gate.
+The existing test workload is unchanged. Historical baseline policy records
+Coverage.py 7.15.2 and pytest 9.0.3; current dependencies remain separately
+pinned in `uv.lock`. Candidate report provenance verifies the actual Coverage.py
+runtime version. GitHub CI remains the required full-validation gate.
 
 ## Committed transition snapshot
 
@@ -58,8 +57,8 @@ Use focused checks for changed behavior. The lightweight policy self-test and
 documentation consistency check need no services:
 
 ```bash
-python scripts/coverage_ratchet.py --self-test
-python scripts/coverage_reports.py --check
+uv run --locked python scripts/coverage_ratchet.py --self-test
+uv run --locked python scripts/coverage_reports.py --check
 ```
 
 `scripts/coverage_forecast.py forecast --help` describes forecasting existing
