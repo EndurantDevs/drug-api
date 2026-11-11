@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import http.client
 import json
 import os
 import ssl
@@ -14,12 +16,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import text
+
 from api.control_imports import LABEL_QUEUE_NAME, NDC_QUEUE_NAME
 from api.control_worker_manifest import (
     worker_job_manifest,
     worker_job_name,
     worker_python,
 )
+from db.connection import db
+from process.label_publish import _is_immutable_worker_image, label_publication_protocol
+from process.result_publication_authority import schema_name
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,102 @@ def ensure_worker(payload: dict[str, Any]) -> dict[str, Any]:
         }
     item = _ensure_spec(spec, payload)
     return {"status": item["status"], "items": [item]}
+
+
+async def ensure_worker_request(worker_request_dict: dict[str, Any]) -> dict[str, Any]:
+    """Verify an unclaimed queued Label run before replacing its ended worker."""
+    spec = _resolve_spec(worker_request_dict)
+    if spec is None or spec.worker_class != "process.Labeling" or _launcher_mode() != "kubernetes":
+        return ensure_worker(worker_request_dict)
+    state_dict = await asyncio.to_thread(_worker_state, spec, worker_request_dict)
+    if state_dict["running"]:
+        item_dict = {**state_dict, "status": "already_running"}
+    elif state_dict.get("job_status") in {"succeeded", "failed"}:
+        item_dict = await _replace_unclaimed_label_worker(spec, worker_request_dict, state_dict)
+    elif state_dict.get("job_status") in {"pending", "error", "unconfigured"}:
+        item_dict = {**state_dict, "status": "exists" if state_dict["job_status"] == "pending" else "failed"}
+    else:
+        item_dict = await asyncio.to_thread(_ensure_kubernetes_job, spec, worker_request_dict, state_dict)
+    return {"status": item_dict["status"], "items": [item_dict]}
+
+
+async def _replace_unclaimed_label_worker(spec, worker_request_dict, state_dict):
+    """Serialize startup repair while retaining all original Job and run evidence."""
+    run_id = worker_request_dict.get("run_id")
+    schema = schema_name(os.getenv("DB_SCHEMA") or "rx_data")
+    try:
+        async with asyncio.timeout(15), db.acquire() as connection:
+            await connection.status("SET LOCAL lock_timeout = '5s'")
+            await connection.status("SET LOCAL statement_timeout = '5s'")
+            run_row_dict = await connection.first(
+                text(
+                    f"SELECT * FROM {schema}.import_run "
+                    "WHERE run_id=:run_id AND engine='drug-api' AND importer='label' FOR UPDATE"
+                ),
+                run_id=run_id if type(run_id) is str else None,
+            )
+            _require_unclaimed_label_run(run_row_dict, run_id, schema)
+            refreshed_dict = await asyncio.to_thread(_worker_state, spec, worker_request_dict)
+            if refreshed_dict["running"] or refreshed_dict.get("job_status") == "pending":
+                return {**refreshed_dict, "status": "already_running" if refreshed_dict["running"] else "exists"}
+            if (
+                refreshed_dict.get("terminal_status") not in {"failed", "succeeded"}
+                or refreshed_dict.get("active_jobs") != 0
+                or refreshed_dict.get("run_id") != run_id
+                or not refreshed_dict.get("job_name")
+                or not refreshed_dict.get("job_uid")
+            ):
+                raise RuntimeError("Label startup repair requires the exact terminal worker")
+            return await _settle_label_job_creation(spec, worker_request_dict, refreshed_dict)
+    except Exception as exc:
+        return {**state_dict, "status": "failed", "message": str(exc)}
+
+
+async def _settle_label_job_creation(spec, worker_request_dict, state_dict):
+    """Retain admission ownership until the bounded HTTP create and lookup settle."""
+    creation = asyncio.create_task(
+        asyncio.to_thread(
+            _ensure_kubernetes_job,
+            spec,
+            worker_request_dict,
+            state_dict,
+            previous_job_uid=state_dict["job_uid"],
+        )
+    )
+    is_canceled = False
+    while True:
+        try:
+            result_dict = await asyncio.shield(creation)
+            break
+        except asyncio.CancelledError:
+            is_canceled = True
+            if creation.done():
+                result_dict = creation.result()
+                break
+    if is_canceled:
+        raise asyncio.CancelledError("Label worker creation settled before releasing its admission")
+    return result_dict
+
+
+def _require_unclaimed_label_run(run_row_dict, run_id, schema):
+    """Require one queued admission with no runtime claim or publication identity."""
+    node_id = os.getenv("HLTHPRT_IMPORT_NODE_ID") or None
+    metrics_dict = dict((run_row_dict or {}).get("metrics") or {})
+    progress_dict = dict((run_row_dict or {}).get("progress") or {})
+    if (
+        type(run_id) is not str
+        or not run_id
+        or run_row_dict is None
+        or run_row_dict["run_id"] != run_id
+        or run_row_dict["status"] != "queued"
+        or any(run_row_dict.get(key) is not None for key in ("started_at", "finished_at", "error"))
+        or any(progress_dict.get(key) not in {None, 0} for key in ("done", "pct"))
+        or (node_id is not None and run_row_dict["node_id"] != node_id)
+        or any(key in metrics_dict for key in ("label_worker_claim", "label_publication_intent", "label_publication"))
+        or metrics_dict.get("label_publication_protocol")
+        != label_publication_protocol(run_id, schema, run_row_dict["node_id"])
+    ):
+        raise RuntimeError("Label startup repair requires an unclaimed queued admission")
 
 
 def _resolve_spec(payload: dict[str, Any]) -> WorkerSpec | None:
@@ -136,8 +239,10 @@ def _launcher_mode() -> str:
 
 def _ensure_kubernetes_job(
     spec: WorkerSpec,
-    payload: dict[str, Any],
+    worker_request_dict: dict[str, Any],
     state: dict[str, Any],
+    *,
+    previous_job_uid: str | None = None,
 ) -> dict[str, Any]:
     image = os.getenv("HLTHPRT_WORKER_JOB_IMAGE", "").strip()
     if not image:
@@ -145,21 +250,60 @@ def _ensure_kubernetes_job(
 
     namespace = _kubernetes_namespace()
     if state.get("job_status") in {"succeeded", "failed"} and state.get("job_name"):
-        try:
-            _delete_kubernetes_job(namespace, str(state["job_name"]))
-        except _KubernetesApiError as exc:
-            if exc.status != 404:
-                return {**state, "status": "failed", "message": str(exc)}
+        if spec.worker_class == "process.Labeling":
+            if state["job_name"] == worker_job_name(spec, worker_request_dict, previous_job_uid=previous_job_uid):
+                return {
+                    **state,
+                    "status": "exists",
+                    "message": "Terminal Label Job is retained for recovery. Reconcile any claimed run separately. "
+                    "A new attempt requires a distinct run.",
+                }
+        else:
+            try:
+                _delete_kubernetes_job(namespace, str(state["job_name"]))
+            except _KubernetesApiError as exc:
+                if exc.status != 404:
+                    return {**state, "status": "failed", "message": str(exc)}
 
-    job = worker_job_manifest(spec, payload, image)
+    if spec.worker_class == "process.Labeling" and not _is_immutable_worker_image(image):
+        return {**state, "status": "failed", "message": "Label worker requires an immutable SHA-256 image"}
+    job = worker_job_manifest(spec, worker_request_dict, image, previous_job_uid=previous_job_uid)
     try:
         _kubernetes_request("POST", f"/apis/batch/v1/namespaces/{namespace}/jobs", job)
     except _KubernetesApiError as exc:
+        if spec.worker_class == "process.Labeling" and (exc.status in {0, 408, 409} or exc.status >= 500):
+            return _reconcile_label_job_creation(state, job, namespace)
         if exc.status == 409:
-            refreshed = _worker_state(spec, payload)
+            refreshed = _worker_state(spec, worker_request_dict)
             return {**refreshed, "status": "already_running" if refreshed.get("running") else "exists"}
         return {**state, "status": "failed", "message": str(exc)}
-    return {**_worker_state(spec, payload), "status": "started"}
+    return {**_worker_state(spec, worker_request_dict), "status": "started"}
+
+
+def _reconcile_label_job_creation(state_dict, expected_job_dict, namespace):
+    """Resolve an uncertain create by its exact name without issuing another POST."""
+    metadata_dict = expected_job_dict["metadata"]
+    name = metadata_dict["name"]
+    try:
+        observed_dict = _kubernetes_request(
+            "GET", f"/apis/batch/v1/namespaces/{namespace}/jobs/{urllib.parse.quote(name, safe='')}"
+        )
+    except _KubernetesApiError:
+        return {**state_dict, "status": "failed", "message": "Label worker creation outcome remains unconfirmed"}
+    matching_jobs = _matching_worker_jobs(observed_dict, metadata_dict["labels"], name)
+    observed_state_dict = _worker_jobs_state(matching_jobs, name, label_jobs=True)
+    expected_image = expected_job_dict["spec"]["template"]["spec"]["containers"][0]["image"]
+    if (
+        not observed_state_dict["job_uid"]
+        or observed_state_dict["run_id"] != (metadata_dict.get("annotations") or {}).get("healthporta.com/run-id")
+        or observed_state_dict["worker_image"] != expected_image
+    ):
+        return {**state_dict, "status": "failed", "message": "Label worker creation identity remains unconfirmed"}
+    return {
+        **state_dict,
+        **observed_state_dict,
+        "status": "already_running" if observed_state_dict["running"] else "exists",
+    }
 
 
 def _delete_kubernetes_job(namespace: str, job_name: str) -> None:
@@ -172,7 +316,9 @@ def _delete_kubernetes_job(namespace: str, job_name: str) -> None:
     _kubernetes_request("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{encoded}", delete_options_dict)
 
 
-def _kubernetes_worker_state(spec: WorkerSpec, worker_request: dict[str, Any] | None = None) -> dict[str, Any]:
+def _kubernetes_worker_state(
+    spec: WorkerSpec, worker_request: dict[str, Any] | None = None, *, claimed_job_name: str | None = None
+) -> dict[str, Any]:
     base_state_dict = {
         "queue": spec.queue,
         "worker_class": spec.worker_class,
@@ -184,7 +330,11 @@ def _kubernetes_worker_state(spec: WorkerSpec, worker_request: dict[str, Any] | 
         "command": " ".join([worker_python(), str(_main_path()), "worker", spec.worker_class, "--burst"]),
     }
     if not _kubernetes_configured():
-        return {**base_state_dict, "job_name": worker_job_name(spec, worker_request or {}), "job_status": "unconfigured"}
+        return {
+            **base_state_dict,
+            "job_name": worker_job_name(spec, worker_request or {}),
+            "job_status": "unconfigured",
+        }
 
     selector_labels_dict = {
         "app.kubernetes.io/managed-by": "healthporta-worker-launcher",
@@ -198,18 +348,65 @@ def _kubernetes_worker_state(spec: WorkerSpec, worker_request: dict[str, Any] | 
     selector = ",".join(f"{label_key}={label_value}" for label_key, label_value in selector_labels_dict.items())
     namespace = _kubernetes_namespace()
     path = f"/apis/batch/v1/namespaces/{namespace}/jobs?{urllib.parse.urlencode({'labelSelector': selector})}"
+    if claimed_job_name:
+        path = f"/apis/batch/v1/namespaces/{namespace}/jobs/{urllib.parse.quote(claimed_job_name, safe='')}"
     try:
         response_body_dict = _kubernetes_request("GET", path)
     except _KubernetesApiError as exc:
-        return {**base_state_dict, "job_name": worker_job_name(spec, worker_request or {}), "job_status": "error", "message": str(exc)}
+        return {
+            **base_state_dict,
+            "job_name": worker_job_name(spec, worker_request or {}),
+            "job_status": "error",
+            "message": str(exc),
+        }
 
-    job_items_list = response_body_dict.get("items") if isinstance(response_body_dict, dict) else []
-    jobs = [job_item for job_item in job_items_list if isinstance(job_item, dict)]
+    jobs = _matching_worker_jobs(response_body_dict, selector_labels_dict, claimed_job_name)
+    is_label = spec.worker_class == "process.Labeling"
+    if is_label:
+        jobs = _ordered_label_jobs(spec, jobs)
+    return {
+        **base_state_dict,
+        **_worker_jobs_state(jobs, worker_job_name(spec, worker_request or {}), label_jobs=is_label),
+    }
+
+
+def _ordered_label_jobs(spec, jobs):
+    """Prefer a replacement over its predecessor even when creation times are equal."""
+    job_names_set = {(job.get("metadata") or {}).get("name") for job in jobs}
+
+    def order(job):
+        """Sort chain leaves after their predecessors, then use creation time."""
+        metadata_dict = job.get("metadata") or {}
+        request_dict = {"run_id": (metadata_dict.get("annotations") or {}).get("healthporta.com/run-id")}
+        successor_name = worker_job_name(spec, request_dict, previous_job_uid=metadata_dict.get("uid"))
+        return (
+            successor_name not in job_names_set,
+            metadata_dict.get("creationTimestamp") or "",
+            metadata_dict.get("name") or "",
+        )
+
+    return sorted(jobs, key=order)
+
+
+def _matching_worker_jobs(response, selector_labels_dict, claimed_job_name):
+    """Match a claimed Job's actual name and worker scope without trusting its launch run."""
+    if claimed_job_name:
+        metadata = response.get("metadata") or {}
+        matching = metadata.get("name") == claimed_job_name and all(
+            (metadata.get("labels") or {}).get(key) == value for key, value in selector_labels_dict.items()
+        )
+        return [response] if matching else []
+    job_items_list = (response.get("items") or []) if isinstance(response, dict) else []
+    return [job_item for job_item in job_items_list if isinstance(job_item, dict)]
+
+
+def _worker_jobs_state(jobs: list[dict[str, Any]], requested_name: str, *, label_jobs: bool = False) -> dict[str, Any]:
+    """Keep aggregate worker state and the actual latest Job identity together."""
     active = sum(int((job.get("status") or {}).get("active") or 0) for job in jobs)
     succeeded = sum(int((job.get("status") or {}).get("succeeded") or 0) for job in jobs)
     failed = sum(int((job.get("status") or {}).get("failed") or 0) for job in jobs)
     latest = jobs[-1] if jobs else {}
-    latest_name = ((latest.get("metadata") or {}).get("name") if isinstance(latest, dict) else None) or worker_job_name(spec, worker_request or {})
+    latest_name = (latest.get("metadata") or {}).get("name") or requested_name
     if active:
         job_status = "active"
     elif failed:
@@ -218,15 +415,41 @@ def _kubernetes_worker_state(spec: WorkerSpec, worker_request: dict[str, Any] | 
         job_status = "succeeded"
     else:
         job_status = "missing"
+    metadata = latest.get("metadata") or {}
+    annotations = metadata.get("annotations") or {}
+    terminal = _terminal_job_status(latest)
+    if label_jobs and not active:
+        job_status = terminal or "missing"
+        if any(_terminal_job_status(job) is None for job in jobs):
+            job_status = "pending"
+    containers = (((latest.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+    image = next((container.get("image") for container in containers if container.get("name") == "worker"), None)
     return {
-        **base_state_dict,
         "running": active > 0,
         "job_name": latest_name,
         "job_status": job_status,
         "active_jobs": active,
         "succeeded_jobs": succeeded,
         "failed_jobs": failed,
+        "run_id": annotations.get("healthporta.com/run-id"),
+        "job_uid": metadata.get("uid"),
+        "terminal_status": terminal,
+        "worker_image": image,
     }
+
+
+def _terminal_job_status(job):
+    """Require a completed Job condition before treating a worker as terminal."""
+    conditions = (job.get("status") or {}).get("conditions") or []
+    return next(
+        (
+            {"Complete": "succeeded", "Failed": "failed"}[condition["type"]]
+            for condition in conditions
+            if condition.get("status") == "True" and condition.get("type") in {"Complete", "Failed"}
+        ),
+        None,
+    )
+
 
 def _kubernetes_namespace() -> str:
     override = os.getenv("HLTHPRT_WORKER_JOB_NAMESPACE", "").strip()
@@ -271,16 +494,29 @@ def _kubernetes_request(method: str, path: str, body: dict[str, Any] | None = No
             "Content-Type": "application/json",
         },
     )
-    context = ssl.create_default_context(cafile=str(_K8S_API_CA)) if _K8S_API_CA.exists() else ssl.create_default_context()
+    context = (
+        ssl.create_default_context(cafile=str(_K8S_API_CA)) if _K8S_API_CA.exists() else ssl.create_default_context()
+    )
     try:
         with urllib.request.urlopen(request, context=context, timeout=10) as response:  # nosec B310 - in-cluster API URL
             raw = response.read()
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except (OSError, http.client.HTTPException) as read_error:
+            raise _KubernetesApiError(0, "Kubernetes error response could not be read") from read_error
         raise _KubernetesApiError(exc.code, detail or exc.reason) from exc
     except urllib.error.URLError as exc:
         raise _KubernetesApiError(0, str(exc.reason)) from exc
-    return json.loads(raw.decode("utf-8")) if raw else {}
+    except (OSError, http.client.HTTPException) as exc:
+        raise _KubernetesApiError(0, str(exc)) from exc
+    try:
+        result_dict = json.loads(raw.decode("utf-8")) if raw else {}
+    except (ValueError, UnicodeError) as exc:
+        raise _KubernetesApiError(0, "Kubernetes response could not be decoded") from exc
+    if not isinstance(result_dict, dict):
+        raise _KubernetesApiError(0, "Kubernetes response is not an object")
+    return result_dict
 
 
 def _label_hash(value: str) -> str:

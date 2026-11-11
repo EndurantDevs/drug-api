@@ -16,6 +16,7 @@ from process.label import (
     label_shutdown,
     label_startup,
     process_label_results,
+    reconcile_label_run,
 )
 from process.label import main as initiate_label_import
 from process.ndc_product import init_file, shutdown, startup
@@ -25,14 +26,10 @@ from process.redis_config import redis_settings
 uvloop.install()
 
 NDC_QUEUE_NAME = (
-    os.environ.get('HLTHPRT_ARQ_QUEUE_NDC')
-    or os.environ.get('ARQ_QUEUE_NDC')
-    or 'arq:queue:drug-api-import-ndc'
+    os.environ.get("HLTHPRT_ARQ_QUEUE_NDC") or os.environ.get("ARQ_QUEUE_NDC") or "arq:queue:drug-api-import-ndc"
 )
 LABEL_QUEUE_NAME = (
-    os.environ.get('HLTHPRT_ARQ_QUEUE_LABEL')
-    or os.environ.get('ARQ_QUEUE_LABEL')
-    or 'arq:queue:drug-api-import-label'
+    os.environ.get("HLTHPRT_ARQ_QUEUE_LABEL") or os.environ.get("ARQ_QUEUE_LABEL") or "arq:queue:drug-api-import-label"
 )
 
 
@@ -51,6 +48,12 @@ class NDC:
 
 class Labeling:
     functions = [download_label_content, process_label_results, init_label_file, control_single_job_start]
+    max_jobs = 1
+    retry_jobs = False
+    keep_result = 0
+    job_timeout = int(os.getenv("HLTHPRT_LABEL_JOB_TIMEOUT_SECONDS", "86400"))
+    if not 1 <= job_timeout <= 86400:
+        raise ValueError("Label job timeout must be between one second and one day")
     on_startup = label_startup
     on_shutdown = label_shutdown
     queue_name = LABEL_QUEUE_NAME
@@ -64,8 +67,8 @@ class DrugIndications:
     functions = [control_single_job_start]
     on_startup = lambda ctx: init_db(db, asyncio.get_event_loop())
     on_shutdown = lambda ctx: db.disconnect()
-    queue_name = 'arq:queue:drug-api-import-indications'
-    job_timeout = int(os.environ.get('HLTHPRT_DRUG_INDICATIONS_JOB_TIMEOUT', '86400'))
+    queue_name = "arq:queue:drug-api-import-indications"
+    job_timeout = int(os.environ.get("HLTHPRT_DRUG_INDICATIONS_JOB_TIMEOUT", "86400"))
     redis_settings = redis_settings()
     job_serializer = msgpack.packb
     job_deserializer = lambda b: msgpack.unpackb(b, raw=False)
@@ -74,7 +77,7 @@ class DrugIndications:
 @click.group()
 def process_group():
     """
-       Initiate run of importers
+    Initiate run of importers
     """
 
 
@@ -85,9 +88,15 @@ def ndc():
 
 
 @click.command(help="Run Labeling Data Import")
-def label():
+@click.option("--reconcile-run", help="Reconcile one managed Label attempt and report its retained stage.")
+def label(reconcile_run=None):
     """Run the SPL labeling importer."""
-    asyncio.run(initiate_label_import())
+    if reconcile_run is None:
+        asyncio.run(initiate_label_import())
+        return
+    if not reconcile_run.strip():
+        raise click.BadParameter("must be a nonblank managed run ID", param_hint="--reconcile-run")
+    asyncio.run(reconcile_label_run(reconcile_run))
 
 
 @click.command(help="Run drug-condition indication mapping import")
@@ -100,4 +109,4 @@ def drug_indications(test, import_id):
 
 process_group.add_command(ndc)
 process_group.add_command(label)
-process_group.add_command(drug_indications, name='drug-indications')
+process_group.add_command(drug_indications, name="drug-indications")

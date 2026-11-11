@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from api.control_run_store import insert_import_run, update_import_run_after_enqueue
 from db.models import db
 from process.import_status_events import enqueue_status_event
+from process.label_publish import label_publication_protocol
 from process.live_progress import (
     enqueue_live_progress,
     estimate_payload_from_live,
@@ -26,14 +27,10 @@ from process.redis_config import redis_dsn, redis_settings
 ENGINE_NAME = "drug-api"
 ACTIVE_STATUSES = {"queued", "starting", "running", "finalizing", "canceling"}
 NDC_QUEUE_NAME = (
-    os.environ.get("HLTHPRT_ARQ_QUEUE_NDC")
-    or os.environ.get("ARQ_QUEUE_NDC")
-    or "arq:queue:drug-api-import-ndc"
+    os.environ.get("HLTHPRT_ARQ_QUEUE_NDC") or os.environ.get("ARQ_QUEUE_NDC") or "arq:queue:drug-api-import-ndc"
 )
 LABEL_QUEUE_NAME = (
-    os.environ.get("HLTHPRT_ARQ_QUEUE_LABEL")
-    or os.environ.get("ARQ_QUEUE_LABEL")
-    or "arq:queue:drug-api-import-label"
+    os.environ.get("HLTHPRT_ARQ_QUEUE_LABEL") or os.environ.get("ARQ_QUEUE_LABEL") or "arq:queue:drug-api-import-label"
 )
 
 _IMPORTERS: dict[str, dict[str, Any]] = {
@@ -136,14 +133,50 @@ def importer_registry() -> list[dict[str, Any]]:
 def _params_schema(name: str) -> list[dict[str, Any]]:
     if name in {"ndc", "label"}:
         return [
-            {"name": "test", "opts": ["--test"], "required": False, "multiple": False, "is_flag": True, "type": "boolean", "default": False, "help": "Process the first FDA partition with a bounded row sample."},
-            {"name": "max_records", "opts": ["--max-records"], "required": False, "multiple": False, "is_flag": False, "type": "integer", "default": 5000, "help": "Maximum records to parse in test mode."},
+            {
+                "name": "test",
+                "opts": ["--test"],
+                "required": False,
+                "multiple": False,
+                "is_flag": True,
+                "type": "boolean",
+                "default": False,
+                "help": "Process the first FDA partition with a bounded row sample.",
+            },
+            {
+                "name": "max_records",
+                "opts": ["--max-records"],
+                "required": False,
+                "multiple": False,
+                "is_flag": False,
+                "type": "integer",
+                "default": 5000,
+                "help": "Maximum records to parse in test mode.",
+            },
         ]
     if name != "drug-indications":
         return []
     return [
-        {"name": "test", "opts": ["--test"], "required": False, "multiple": False, "is_flag": True, "type": "boolean", "default": False, "help": "Process a small label sample for a quick smoke run."},
-        {"name": "import_id", "opts": ["--import-id"], "required": False, "multiple": False, "is_flag": False, "type": "text", "default": None, "help": "Override import id/date suffix for table names."},
+        {
+            "name": "test",
+            "opts": ["--test"],
+            "required": False,
+            "multiple": False,
+            "is_flag": True,
+            "type": "boolean",
+            "default": False,
+            "help": "Process a small label sample for a quick smoke run.",
+        },
+        {
+            "name": "import_id",
+            "opts": ["--import-id"],
+            "required": False,
+            "multiple": False,
+            "is_flag": False,
+            "type": "text",
+            "default": None,
+            "help": "Override import id/date suffix for table names.",
+        },
     ]
 
 
@@ -182,11 +215,7 @@ def _worker_health() -> dict[str, Any]:
 
 
 def _queue_depths() -> dict[str, int]:
-    queues = {
-        str(spec.get("queue"))
-        for spec in _IMPORTERS.values()
-        if str(spec.get("queue") or "").strip()
-    }
+    queues = {str(spec.get("queue")) for spec in _IMPORTERS.values() if str(spec.get("queue") or "").strip()}
     try:
         client = redis.Redis.from_url(redis_dsn(), socket_connect_timeout=1.0, socket_timeout=1.0)
         return {queue: int(client.zcard(queue) or 0) for queue in sorted(queues)}
@@ -218,16 +247,21 @@ async def create_import_run(run_request: dict[str, Any]) -> tuple[dict[str, Any]
             if active:
                 return active, False
         raise
-    if importer == "ndc":
+    if importer in {"ndc", "label"}:
         async with db.session() as session:
             await session.commit()
-    enqueue_update = await _enqueue(spec, run_record_dict)
-    if await update_import_run_after_enqueue(schema, run_id, enqueue_update) != 1:
+    enqueue_update_dict = await _enqueue(spec, run_record_dict)
+    if importer == "label":
+        enqueue_update_dict = {
+            **enqueue_update_dict,
+            "metrics": {**run_record_dict["metrics"], **enqueue_update_dict.get("metrics", {})},
+        }
+    if await update_import_run_after_enqueue(schema, run_id, enqueue_update_dict) != 1:
         current_run = await get_import_run(run_id)
         if current_run is None:
             raise RuntimeError("import run disappeared after enqueue")
         return current_run, True
-    created_run_dict = {**run_record_dict, **enqueue_update}
+    created_run_dict = {**run_record_dict, **enqueue_update_dict}
     enqueue_status_event(created_run_dict)
     _write_run_live_progress(created_run_dict, publish_event=False)
     return created_run_dict, True
@@ -241,10 +275,14 @@ def _run_record_from_request(
     idempotency_key: str | None,
     now: datetime.datetime,
 ) -> dict[str, Any]:
+    node_id = os.getenv("HLTHPRT_IMPORT_NODE_ID")
+    metrics_dict = {}
+    if importer == "label":
+        metrics_dict["label_publication_protocol"] = label_publication_protocol(run_id, _schema(), node_id)
     return {
         "run_id": run_id,
         "engine": ENGINE_NAME,
-        "node_id": os.getenv("HLTHPRT_IMPORT_NODE_ID"),
+        "node_id": node_id,
         "importer": importer,
         "family": spec["family"],
         "status": "queued",
@@ -256,7 +294,7 @@ def _run_record_from_request(
         "created_at": now,
         "heartbeat_at": now,
         "progress": {"unit": "run", "total": 1, "done": 0, "pct": 0, "message": "queued"},
-        "metrics": {},
+        "metrics": metrics_dict,
         "error": None,
         "import_id": run_request.get("import_id"),
         "retry_of_run_id": run_request.get("retry_of_run_id"),
@@ -284,11 +322,31 @@ async def _enqueue(spec: dict[str, Any], run_record_dict: dict[str, Any]) -> dic
         )
         job = await redis.enqueue_job(spec["function"], job_payload_dict, _queue_name=spec["queue"])
     except Exception as exc:
-        return {"status": "failed", "phase_detail": "enqueue failed", "heartbeat_at": utc_now(), "progress": {"unit": "run", "total": 1, "done": 1, "pct": 100, "message": "enqueue failed"}, "metrics": {"queue": spec["queue"], "function": spec["function"]}, "error": {"code": "enqueue_failed", "message": str(exc)}}
-    return {"status": "queued", "phase_detail": "enqueued", "heartbeat_at": utc_now(), "progress": {"unit": "run", "total": 1, "done": 0, "pct": 0, "message": "queued"}, "metrics": {"queue": spec["queue"], "function": spec["function"], "job_id": getattr(job, "job_id", None) or str(job)}, "error": None}
+        return {
+            "status": "failed",
+            "phase_detail": "enqueue failed",
+            "heartbeat_at": utc_now(),
+            "progress": {"unit": "run", "total": 1, "done": 1, "pct": 100, "message": "enqueue failed"},
+            "metrics": {"queue": spec["queue"], "function": spec["function"]},
+            "error": {"code": "enqueue_failed", "message": str(exc)},
+        }
+    return {
+        "status": "queued",
+        "phase_detail": "enqueued",
+        "heartbeat_at": utc_now(),
+        "progress": {"unit": "run", "total": 1, "done": 0, "pct": 0, "message": "queued"},
+        "metrics": {
+            "queue": spec["queue"],
+            "function": spec["function"],
+            "job_id": getattr(job, "job_id", None) or str(job),
+        },
+        "error": None,
+    }
 
 
-async def list_import_runs(status: str | None = None, importer: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+async def list_import_runs(
+    status: str | None = None, importer: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
     """Return recent import runs, optionally filtered by status or importer."""
     await ensure_import_run_table()
     schema = _schema()
@@ -342,6 +400,7 @@ async def request_cancel(run_id: str) -> dict[str, Any] | None:
              WHERE run_id = :run_id
                AND (importer <> 'ndc' OR (status='queued'
                     AND NOT (COALESCE(metrics, '{{}}'::jsonb) ? 'ndc_attempt_id')))
+               AND (importer <> 'label' OR status='queued')
             """
             ),
             run_id=run_id,
@@ -415,7 +474,9 @@ async def retry_import_run(run_id: str, retry_request: dict[str, Any]) -> tuple[
 
 async def _find_active_by_idempotency_key(idempotency_key: str) -> dict[str, Any] | None:
     row = await db.first(
-        text(f"SELECT * FROM {_schema()}.import_run WHERE idempotency_key = :idempotency_key AND status = ANY(:statuses) LIMIT 1"),
+        text(
+            f"SELECT * FROM {_schema()}.import_run WHERE idempotency_key = :idempotency_key AND status = ANY(:statuses) LIMIT 1"
+        ),
         idempotency_key=idempotency_key,
         statuses=list(ACTIVE_STATUSES),
     )
