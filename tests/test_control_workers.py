@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from unittest.mock import Mock
+
+import pytest
+
 from api import control_workers
 from api.control_imports import NDC_QUEUE_NAME
 from process import DrugIndications
@@ -83,9 +87,7 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "healthporta-dev")
     monkeypatch.setattr(control_workers, "_kubernetes_request", fake_request)
 
-    ensure_result = control_workers.ensure_worker(
-        {"importer": "ndc", "import_id": "import_123", "run_id": "run_123"}
-    )
+    ensure_result = control_workers.ensure_worker({"importer": "ndc", "import_id": "import_123", "run_id": "run_123"})
 
     assert ensure_result["status"] == "started"
     post = next(call for call in calls if call[0] == "POST")
@@ -106,9 +108,7 @@ def test_ensure_worker_can_create_kubernetes_job(monkeypatch):
     pod_spec = job["spec"]["template"]["spec"]
     assert pod_spec["serviceAccountName"] == "drug-api-worker"
     assert pod_spec["imagePullSecrets"] == [{"name": "ghcr-pull"}, {"name": "mirror-pull"}]
-    assert pod_spec["volumes"] == [
-        {"name": "import-workdir", "persistentVolumeClaim": {"claimName": "import-workdir"}}
-    ]
+    assert pod_spec["volumes"] == [{"name": "import-workdir", "persistentVolumeClaim": {"claimName": "import-workdir"}}]
     assert job["spec"]["activeDeadlineSeconds"] == 43200
 
 
@@ -137,6 +137,50 @@ def test_kubernetes_completed_worker_job_is_recreated(monkeypatch):
     assert any(call[0] == "POST" and call[1] == "/apis/batch/v1/namespaces/healthporta-dev/jobs" for call in calls)
 
 
+@pytest.mark.parametrize("status,condition", [("failed", "Failed"), ("succeeded", "Complete")])
+def test_terminal_label_job_is_retained_for_recovery(monkeypatch, status, condition):
+    spec = control_workers._BY_IMPORTER["label"]
+    payload = {"importer": "label", "run_id": "original-run"}
+    job_dict = control_workers.worker_job_manifest(spec, payload, "example")
+    job_dict["metadata"]["uid"] = "original-worker-uid"
+    job_dict["status"] = {status: 1, "conditions": [{"type": condition, "status": "True"}]}
+    requests = Mock(return_value={"items": [job_dict]})
+    monkeypatch.setenv("HLTHPRT_WORKER_LAUNCHER", "kubernetes")
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "example")
+    monkeypatch.setattr(control_workers, "_kubernetes_configured", lambda: True)
+    monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "test-workers")
+    monkeypatch.setattr(control_workers, "_kubernetes_request", requests)
+
+    ensured_dict = control_workers.ensure_worker(payload)
+
+    assert ensured_dict["status"] == "exists"
+    assert ensured_dict["items"][0]["job_uid"] == "original-worker-uid"
+    assert "retained for recovery" in ensured_dict["items"][0]["message"]
+    assert all(call.args[0] == "GET" for call in requests.call_args_list)
+
+
+def test_distinct_label_worker_preserves_terminal_predecessor(monkeypatch):
+    spec = control_workers._BY_IMPORTER["label"]
+    payload = {"run_id": "new-run"}
+    predecessor_dict = control_workers.worker_job_manifest(spec, {"run_id": "original-run"}, "example")
+    predecessor_dict["metadata"]["uid"] = "original-worker-uid"
+    predecessor_dict["status"] = {"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]}
+    state_dict = control_workers._worker_jobs_state([predecessor_dict], control_workers.worker_job_name(spec, payload))
+    requests = Mock(return_value={"items": []})
+    monkeypatch.setenv("HLTHPRT_WORKER_JOB_IMAGE", "example/worker@sha256:" + "1" * 64)
+    monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "test-workers")
+    monkeypatch.setattr(control_workers, "_kubernetes_request", requests)
+    monkeypatch.setattr(control_workers, "_worker_state", Mock(return_value={"running": True}))
+
+    ensured_dict = control_workers._ensure_kubernetes_job(spec, payload, state_dict)
+
+    assert ensured_dict["status"] == "started"
+    requests.assert_called_once()
+    assert requests.call_args.args[0] == "POST"
+    assert requests.call_args.args[2]["metadata"]["name"] != predecessor_dict["metadata"]["name"]
+    assert predecessor_dict["metadata"]["uid"] == "original-worker-uid"
+
+
 def test_find_running_pid_ignores_other_node_worker(monkeypatch):
     output = """
 111 /opt/python main.py worker process.NDC HLTHPRT_IMPORT_NODE_ID=other_drug
@@ -149,3 +193,71 @@ def test_find_running_pid_ignores_other_node_worker(monkeypatch):
     spec = control_workers._BY_QUEUE[NDC_QUEUE_NAME]
 
     assert control_workers._find_running_pid(spec) == 222
+
+
+@pytest.mark.parametrize(
+    "condition,expected", [("Complete", "succeeded"), ("Failed", "failed"), ("FailureTarget", None), (None, None)]
+)
+def test_worker_proof_uses_actual_job_identity(monkeypatch, condition, expected):
+    image = "ghcr.io/example/worker@sha256:" + "1" * 64
+    job_dict = {
+        "metadata": {
+            "name": "observed-job",
+            "uid": "observed-uid",
+            "annotations": {"healthporta.com/run-id": "observed-run"},
+        },
+        "spec": {"template": {"spec": {"containers": [{"name": "worker", "image": image}]}}},
+        "status": {
+            "active": 0,
+            "failed": 1,
+            "conditions": [] if condition is None else [{"type": condition, "status": "True"}],
+        },
+    }
+    monkeypatch.setenv("HLTHPRT_WORKER_LAUNCHER", "kubernetes")
+    monkeypatch.setattr(control_workers, "_kubernetes_configured", lambda: True)
+    monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "example-workers")
+    monkeypatch.setattr(control_workers, "_kubernetes_request", Mock(return_value={"items": [job_dict]}))
+    state_dict = control_workers._worker_state(control_workers._BY_IMPORTER["label"], {"run_id": "requested-run"})
+    assert state_dict["run_id"] == "observed-run"
+    assert state_dict["job_uid"] == "observed-uid"
+    assert state_dict["terminal_status"] == expected
+    assert state_dict["worker_image"] == image and state_dict["active_jobs"] == 0
+
+
+@pytest.mark.parametrize("importer", ["ndc", "label", "drug-indications"])
+def test_only_label_gets_runtime_identity_fields(importer):
+    job = control_workers.worker_job_manifest(control_workers._BY_IMPORTER[importer], {"run_id": "example"}, "example")
+    env_by_name = {value["name"]: value for value in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+    names = {"HLTHPRT_LABEL_WORKER_JOB_NAME", "HLTHPRT_LABEL_WORKER_JOB_UID", "HLTHPRT_WORKER_JOB_IMAGE"}
+    if importer == "label":
+        assert env_by_name["HLTHPRT_WORKER_JOB_IMAGE"] == {"name": "HLTHPRT_WORKER_JOB_IMAGE", "value": "example"}
+        assert (
+            env_by_name["HLTHPRT_LABEL_WORKER_JOB_NAME"]["valueFrom"]["fieldRef"]["fieldPath"]
+            == "metadata.labels['batch.kubernetes.io/job-name']"
+        )
+        assert (
+            env_by_name["HLTHPRT_LABEL_WORKER_JOB_UID"]["valueFrom"]["fieldRef"]["fieldPath"]
+            == "metadata.labels['batch.kubernetes.io/controller-uid']"
+        )
+    else:
+        assert not names.intersection(env_by_name)
+
+
+@pytest.mark.parametrize("damage", [None, "name", "scope"])
+def test_claimed_job_lookup_checks_actual_scope(monkeypatch, damage):
+    spec = control_workers._BY_IMPORTER["label"]
+    job = control_workers.worker_job_manifest(spec, {"run_id": "other-launch-run"}, "example")
+    job["metadata"].update(name="actual-job", uid="actual-uid")
+    job["status"] = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
+    if damage == "name":
+        job["metadata"]["name"] = "other-job"
+    if damage == "scope":
+        job["metadata"]["labels"]["healthporta.com/engine"] = "other"
+    request = Mock(return_value=job)
+    monkeypatch.setattr(control_workers, "_kubernetes_configured", lambda: True)
+    monkeypatch.setattr(control_workers, "_kubernetes_namespace", lambda: "example-workers")
+    monkeypatch.setattr(control_workers, "_kubernetes_request", request)
+    state_dict = control_workers._kubernetes_worker_state(spec, claimed_job_name="actual-job")
+    assert request.call_args.args == ("GET", "/apis/batch/v1/namespaces/example-workers/jobs/actual-job")
+    assert state_dict["job_uid"] == (None if damage else "actual-uid")
+    assert state_dict["terminal_status"] == (None if damage else "succeeded")

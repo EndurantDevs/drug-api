@@ -8,9 +8,11 @@ from typing import Any
 _ENGINE_LABEL = "drug"
 
 
-def worker_job_manifest(spec: Any, payload: dict[str, Any], image: str) -> dict[str, Any]:
+def worker_job_manifest(
+    spec: Any, payload: dict[str, Any], image: str, *, previous_job_uid: str | None = None
+) -> dict[str, Any]:
     """Build the Kubernetes Job manifest for one import worker."""
-    job_name = worker_job_name(spec, payload)
+    job_name = worker_job_name(spec, payload, previous_job_uid=previous_job_uid)
     run_id = str(payload.get("run_id") or "").strip()
     volumes_list = _worker_job_pvc_volumes()
     labels_dict = _worker_job_labels(spec, run_id)
@@ -34,12 +36,16 @@ def worker_job_manifest(spec: Any, payload: dict[str, Any], image: str) -> dict[
     }
 
 
-def worker_job_name(spec: Any, payload: dict[str, Any]) -> str:
+def worker_job_name(spec: Any, payload: dict[str, Any], *, previous_job_uid: str | None = None) -> str:
     """Return the deterministic Kubernetes Job name for a worker request."""
     run_id = str(payload.get("run_id") or payload.get("import_id") or "adhoc").strip()
-    seed = f"{_ENGINE_LABEL}:{spec.worker_class}:{spec.role}:{run_id}"
-    suffix = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:10]
     base = _dns_safe(f"hpw-{_ENGINE_LABEL}-{spec.worker_class}-{spec.role}")
+    if previous_job_uid is not None:
+        replacement_seed = f"{_ENGINE_LABEL}:{spec.worker_class}:{spec.role}:{run_id}:replacement:{previous_job_uid}"
+        suffix = hashlib.sha256(replacement_seed.encode("utf-8")).hexdigest()[:10]
+        return f"{base[:52]}-{suffix}"[:63].rstrip("-")
+    legacy_seed = f"{_ENGINE_LABEL}:{spec.worker_class}:{spec.role}:{run_id}"
+    suffix = hashlib.sha1(legacy_seed.encode("utf-8")).hexdigest()[:10]
     return f"{base[:52]}-{suffix}"[:63].rstrip("-")
 
 
@@ -58,6 +64,20 @@ def _worker_job_container(
         {"name": "HLTHPRT_WORKER_LAUNCHER", "value": "process"},
         {"name": "HLTHPRT_IMPORT_NODE_ID", "value": os.getenv("HLTHPRT_IMPORT_NODE_ID", "")},
     ]
+    if spec.worker_class == "process.Labeling":
+        env_list.extend(
+            [
+                {"name": "HLTHPRT_WORKER_JOB_IMAGE", "value": image},
+                {
+                    "name": "HLTHPRT_LABEL_WORKER_JOB_NAME",
+                    "valueFrom": {"fieldRef": {"fieldPath": "metadata.labels['batch.kubernetes.io/job-name']"}},
+                },
+                {
+                    "name": "HLTHPRT_LABEL_WORKER_JOB_UID",
+                    "valueFrom": {"fieldRef": {"fieldPath": "metadata.labels['batch.kubernetes.io/controller-uid']"}},
+                },
+            ]
+        )
     import_id = str(worker_request.get("import_id") or "").strip()
     if import_id:
         env_list.append({"name": "HLTHPRT_IMPORT_ID_OVERRIDE", "value": import_id})

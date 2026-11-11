@@ -107,7 +107,22 @@ class _Database:
         self.statements.append(statement)
         self.events.append("ddl")
 
-    async def first(self, *_args, **_kwargs):
+    async def first(self, statement, **params):
+        if 'FROM "rx_data"."result_publication_authority"' in str(statement):
+            assert str(statement).endswith(" FOR UPDATE")
+            assert params == {"importer_id": "label"}
+            self.statements.append(str(statement))
+            self.events.append("authority-lock")
+            return {
+                "importer_id": "label",
+                "local_lineage_id": _LINEAGE,
+                "local_generation": 0,
+                "origin_lineage_id": None,
+                "origin_generation": None,
+                "published_at": None,
+                "relation_oids": None,
+                "consumed_dependencies": None,
+            }
         return {"allowed": True}
 
 
@@ -126,8 +141,12 @@ async def test_label_publication_advances_authority_before_atomic_commit(monkeyp
     assert database.events[-2:] == ["authority", "commit"]
     assert "ALTER TABLE IF EXISTS rx_data.label_20260921 RENAME TO label;" in database.statements
     timeout_index = database.statements.index("SET LOCAL lock_timeout = '5s'")
+    stage_lock_index = database.statements.index('LOCK TABLE "rx_data"."label_20260921" IN ACCESS EXCLUSIVE MODE')
+    authority_lock_index = next(
+        index for index, statement in enumerate(database.statements) if "result_publication_authority" in statement
+    )
     first_live_ddl_index = database.statements.index("DROP TABLE IF EXISTS rx_data.label_old;")
-    assert timeout_index < first_live_ddl_index
+    assert timeout_index < stage_lock_index < authority_lock_index < first_live_ddl_index
 
 
 @pytest.mark.asyncio

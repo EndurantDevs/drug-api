@@ -15,7 +15,7 @@ from api.control_imports import (
     request_cancel,
     retry_import_run,
 )
-from api.control_workers import ensure_worker, worker_registry
+from api.control_workers import ensure_worker_request, worker_registry
 
 blueprint = Blueprint("control", url_prefix="/control/v1")
 
@@ -23,7 +23,10 @@ blueprint = Blueprint("control", url_prefix="/control/v1")
 @blueprint.exception(SanicException)
 async def control_error(request, exc):
     """Return Sanic control-plane errors as JSON envelopes."""
-    return response.json({"error": {"code": "control_error", "message": str(exc), "request_id": getattr(request, "id", None)}}, status=getattr(exc, "status_code", 500))
+    return response.json(
+        {"error": {"code": "control_error", "message": str(exc), "request_id": getattr(request, "id", None)}},
+        status=getattr(exc, "status_code", 500),
+    )
 
 
 def _require_control_auth(request):
@@ -73,7 +76,7 @@ async def control_ensure_worker(request):
     if auth_error := _require_control_auth(request):
         return auth_error
     payload = request.json if isinstance(request.json, dict) else {}
-    return response.json(ensure_worker(payload), status=202, default=str)
+    return response.json(await ensure_worker_request(payload), status=202, default=str)
 
 
 @blueprint.post("/imports")
@@ -94,7 +97,11 @@ async def control_list_imports(request):
     """List import runs filtered by status or importer."""
     if auth_error := _require_control_auth(request):
         return auth_error
-    runs = await list_import_runs(status=request.args.get("status"), importer=request.args.get("importer"), limit=int(request.args.get("limit") or 50))
+    runs = await list_import_runs(
+        status=request.args.get("status"),
+        importer=request.args.get("importer"),
+        limit=int(request.args.get("limit") or 50),
+    )
     return response.json({"items": runs, "next_cursor": None}, default=str)
 
 
