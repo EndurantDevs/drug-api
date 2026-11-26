@@ -50,6 +50,9 @@ async def test_connect_publishes_only_after_probe(monkeypatch, candidate_engine)
         release.set()
 
     assert database.engine is candidate_engine and database.session_factory is session_factory
+    assert database_connection.create_async_engine.call_args.kwargs["connect_args"] == {
+        "server_settings": {"jit": "off"}
+    }
     factory.assert_called_once_with(candidate_engine, expire_on_commit=False, autoflush=False)
     candidate_engine.connect.return_value.__aexit__.assert_awaited_once()
     await database.connect()
