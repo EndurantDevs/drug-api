@@ -195,6 +195,7 @@ class Database:
                 max_overflow=max_overflow,
                 echo=_is_env_enabled(os.getenv("HLTHPRT_DB_ECHO") or os.getenv("DB_ECHO")),
                 pool_pre_ping=True,
+                connect_args={"server_settings": {"jit": "off"}},
             )
             try:
                 async with engine.connect() as connection:
