@@ -48,6 +48,9 @@ class RowAdapter:
         return self._mapping.values()
 
 
+DEFAULT_STREAM_YIELD_PER = 500
+
+
 class StatementAdapter:
     def __init__(self, database: Any, stmt: Executable):
         self._db = database
@@ -117,11 +120,12 @@ class StatementAdapter:
         result = await self.execute(params, **kwargs)
         return getattr(result, "rowcount", None)
 
-    async def iterate(self, params: Any = None, **kwargs: Any):
-        """Stream rows from the wrapped statement."""
+    async def iterate(self, params: Any = None, *, yield_per: int = DEFAULT_STREAM_YIELD_PER, **kwargs: Any):
+        """Stream rows from the wrapped statement in bounded cursor batches."""
         execute_params = params if params is not None else kwargs
+        stream_stmt = self._stmt.execution_options(yield_per=yield_per)
         async with self._db.session() as session:
-            async_result = await session.stream(self._stmt, execute_params)
+            async_result = await session.stream(stream_stmt, execute_params)
             if isinstance(self._stmt, Select) and _is_single_model_select(self._stmt):
                 async for row in async_result.scalars():
                     yield row
